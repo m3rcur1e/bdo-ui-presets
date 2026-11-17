@@ -1,14 +1,15 @@
 """PySide6 editor for BDO UI presets: drag panels on a canvas, keep a library."""
 
+import html
 import sys
 import threading
 import time
 
-from PySide6.QtCore import (QByteArray, QObject, QPointF, QRectF, QSize, Qt, QTimer,
-                            QUrl, Signal)
-from PySide6.QtGui import (QAction, QBrush, QColor, QDesktopServices, QFont, QIcon,
-                           QImage, QKeySequence, QPainter, QPainterPath, QPen,
-                           QPixmap, QShortcut)
+from PySide6.QtCore import (QByteArray, QLibraryInfo, QLocale, QObject, QPointF, QRectF,
+                            QSize, Qt, QTimer, QTranslator, QUrl, Signal)
+from PySide6.QtGui import (QAction, QActionGroup, QBrush, QColor, QDesktopServices,
+                           QFont, QIcon, QImage, QKeySequence, QPainter, QPainterPath,
+                           QPen, QPixmap, QShortcut)
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
                                QDialogButtonBox, QFileDialog, QFormLayout, QFrame,
                                QGraphicsItem, QGraphicsPixmapItem,
@@ -17,12 +18,14 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
                                QLineEdit, QListWidget, QListWidgetItem,
                                QMainWindow, QMenu, QMessageBox, QPushButton,
                                QSizePolicy, QSpinBox, QSplitter, QStyle,
-                               QStyledItemDelegate, QToolButton, QVBoxLayout,
+                               QStyledItemDelegate, QToolBar, QToolButton, QVBoxLayout,
                                QWidget)
 
 import core
+import i18n
 import panels
 import theme
+from i18n import tr, trn
 
 COLORS = {
     "quick": QColor(90, 170, 255),
@@ -36,32 +39,129 @@ ROLE_EL = Qt.UserRole
 ROLE_KIND = Qt.UserRole + 1
 ROLE_CARD = Qt.UserRole + 2
 
+# (section, ((input, what it does), ...)) as catalog keys. An input that does not
+# start with "keys." is a plain key name and is shown as it is in every language.
 SHORTCUTS = (
-    ("Canvas", (
-        ("Drag", "Move a panel; edges snap to other panels and the screen border"),
-        ("Arrows / Shift+Arrows", "Nudge the selection by 1 / 10 units"),
-        ("Ctrl+click, drag on empty space", "Select several panels"),
-        ("Mouse wheel", "Zoom at the cursor"),
-        ("Middle button drag, Space+drag", "Pan"),
-        ("F", "Fit the whole screen"),
-        ("Ctrl+1", "Zoom to 100%"),
-        ("H", "Show / hide the selected panels in game"),
-        ("Ctrl+A / Esc", "Select all / nothing"),
+    ("keys.canvas", (
+        ("keys.k.drag", "keys.drag"),
+        ("keys.k.nudge", "keys.nudge"),
+        ("keys.k.multi", "keys.multi"),
+        ("keys.k.wheel", "keys.wheel"),
+        ("keys.k.pan", "keys.pan"),
+        ("F", "keys.fit"),
+        ("Ctrl+1", "keys.actual"),
+        ("H", "keys.toggle"),
+        ("Ctrl+A / Esc", "keys.select"),
     )),
-    ("Layout", (
-        ("Ctrl+S / Ctrl+Shift+S", "Save / save under another name"),
-        ("Ctrl+Z / Ctrl+Shift+Z", "Undo / redo"),
-        ("Ctrl+F", "Search the library"),
-        ("F2 / Ctrl+D / Delete", "Rename / duplicate / delete the library entry"),
+    ("keys.layout", (
+        ("Ctrl+S / Ctrl+Shift+S", "keys.save"),
+        ("Ctrl+Z / Ctrl+Shift+Z", "keys.undo"),
+        ("Ctrl+F", "keys.search"),
+        ("F2 / Ctrl+D / Delete", "keys.entry"),
     )),
 )
+
+
+# ---------------------------------------------------------------- language
+
+LANG_AUTO = "auto"          # config value: follow the system locale
+_qt_translator = None
+
+
+def system_language():
+    """Catalog code for the system locale; English when there is no such catalog."""
+    locale = QLocale.system()
+    return i18n.match([*locale.uiLanguages(), locale.name()]) or i18n.SOURCE
+
+
+def configured_language():
+    """The remembered choice: a catalog code, or LANG_AUTO."""
+    choice = core.load_config().get("language")
+    return choice if choice in i18n.names() else LANG_AUTO
+
+
+def apply_language(choice):
+    """Switch the texts to a catalog code or LANG_AUTO; returns the code in use."""
+    global _qt_translator
+    code = i18n.set_language(system_language() if choice == LANG_AUTO else choice)
+    # Best effort for the texts Qt draws itself (context menu of an edit field,
+    # the non-native file dialog); Qt builds without this translation stay English.
+    app = QApplication.instance()
+    if app:
+        if _qt_translator:
+            app.removeTranslator(_qt_translator)
+            _qt_translator = None
+        translator = QTranslator(app)
+        if code != i18n.SOURCE and translator.load(
+                "qtbase_" + code, QLibraryInfo.path(QLibraryInfo.TranslationsPath)):
+            app.installTranslator(translator)
+            _qt_translator = translator
+    return code
+
+
+# ---------------------------------------------------------------- small dialogs
+# Built by hand rather than with the QMessageBox / QInputDialog statics, so the
+# buttons are labelled from the catalog and not by Qt.
+
+def notify(parent, text, icon=QMessageBox.Information):
+    box = QMessageBox(icon, "bdo-ui", text, QMessageBox.NoButton, parent)
+    box.addButton(tr("btn.ok"), QMessageBox.AcceptRole)
+    box.exec()
+
+
+def warn(parent, text):
+    notify(parent, text, QMessageBox.Warning)
+
+
+_ROLES = {"yes": QMessageBox.YesRole, "no": QMessageBox.NoRole,
+          "save": QMessageBox.AcceptRole, "discard": QMessageBox.DestructiveRole,
+          "cancel": QMessageBox.RejectRole}
+
+
+def ask(parent, text, *buttons):
+    """A question; returns the name of the chosen button ("yes" / "no" by default).
+
+    The first button is the default one, the last one is what Esc picks.
+    """
+    buttons = buttons or ("yes", "no")
+    box = QMessageBox(QMessageBox.Question, "bdo-ui", text, QMessageBox.NoButton, parent)
+    made = {name: box.addButton(tr("btn." + name), _ROLES[name]) for name in buttons}
+    box.setDefaultButton(made[buttons[0]])
+    box.setEscapeButton(made[buttons[-1]])
+    box.exec()
+    clicked = box.clickedButton()
+    return next((name for name, b in made.items() if b is clicked), buttons[-1])
+
+
+def ask_text(parent, title, label, text=""):
+    """One line of text; returns (text, accepted)."""
+    dlg = QInputDialog(parent)
+    dlg.setWindowTitle(title)
+    dlg.setLabelText(label)
+    dlg.setTextValue(text)
+    dlg.setOkButtonText(tr("btn.ok"))
+    dlg.setCancelButtonText(tr("btn.cancel"))
+    for button in dlg.findChildren(QPushButton):
+        button.setIcon(QIcon())
+    accepted = dlg.exec() == QDialog.Accepted
+    return dlg.textValue(), accepted
+
+
+def plain_buttons(box, **texts):
+    """Label the standard buttons of a button box from the catalog, without icons."""
+    for name, button in (("ok", QDialogButtonBox.Ok), ("cancel", QDialogButtonBox.Cancel),
+                         ("close", QDialogButtonBox.Close)):
+        b = box.button(button)
+        if b:
+            b.setText(texts.get(name) or tr("btn." + name))
+            b.setIcon(QIcon())
 
 
 def fmt_screen(screen):
     return f"{screen[0]}×{screen[1]}"
 
 
-def section_label(text):
+def section_label(text=""):
     """Small caps heading of a sidebar block."""
     label = QLabel(text)
     label.setObjectName("section")
@@ -79,6 +179,45 @@ def muted_label(text="", wrap=False):
     label.setObjectName("muted")
     label.setWordWrap(wrap)
     return label
+
+
+class ElidedLabel(QLabel):
+    """A one-line label that cuts its text with "…" instead of demanding room for it.
+
+    Translated texts differ a lot in length; the full text goes to the tooltip
+    whenever it is cut.
+    """
+
+    def __init__(self, text=""):
+        super().__init__()
+        self.full = ""
+        self.setText(text)
+
+    def setText(self, text):
+        self.full = text
+        self.updateGeometry()
+        self.fit()
+
+    def text(self):
+        return self.full
+
+    def fit(self):
+        cut = self.fontMetrics().elidedText(self.full, Qt.ElideRight, self.width())
+        if QLabel.text(self) != cut:
+            super().setText(cut)
+        self.setToolTip(self.full if cut != self.full else "")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.fit()
+
+    def sizeHint(self):
+        return QSize(self.fontMetrics().horizontalAdvance(self.full) + 2,
+                     super().sizeHint().height())
+
+    def minimumSizeHint(self):
+        return QSize(self.fontMetrics().horizontalAdvance("…") + 2,
+                     super().minimumSizeHint().height())
 
 
 _portraits = {}
@@ -151,50 +290,21 @@ def profile_parts(profile):
     cls, spec = core.char_class(skills)
     name = core.char_registry().get(char, {}).get("name", "")
     parts = [p for p in (name, cls, spec) if p]
-    return parts or [f"char …{char[-8:]}"], core.portrait_path(char)
+    return parts or [tr("char.anon", id=char[-8:])], core.portrait_path(char)
 
 
-TIPS = (
-    "Drag a panel to move it; arrow keys nudge it by 1 unit, Shift+arrows by 10.",
-    "Layouts only reach the game through a slot: press “Write to game slot”, then "
-    "in game open Edit UI and load that preset.",
-    "Slots can be written only while Black Desert is closed — the running game "
-    "rewrites its settings file on exit.",
-    "Every write to a game slot keeps a copy of the game's file in the library's "
-    ".backups folder.",
-    "Press H to show or hide the selected panels in game; hidden ones stay on the "
-    "canvas as faint outlines.",
-    "Hold Space and drag, or drag with the middle button, to pan. The wheel zooms "
-    "at the cursor, F fits the whole screen.",
-    "View → Background screenshot… puts a game screenshot under the layout, so "
-    "panels can be placed around your character.",
-    "Select several panels with Ctrl+click or by dragging on empty space, then "
-    "align them from the inspector or the Edit menu.",
-    "Type exact X / Y values in the inspector on the right; with several panels "
-    "selected they move as a group.",
-    "Right-click a game slot to copy what is in it now into the library.",
-    "Bind a character (Layout → Character…) and the entry also stores the skills "
-    "in its quick and cooldown slots.",
-    "Q1–Q20 are quick slots numbered as in game, C0–C19 are cooldown slots.",
-    "Cooldown captions are drawn under the icon: leave a gap between rows of "
-    "cooldown slots or the text overlaps.",
-    "The game does not store character names on disk — give them once with "
-    "“Name…” in the character picker.",
-    "Turn on the grid in the toolbar to snap panels to a fixed step; the magnet "
-    "toggles snapping to other panels.",
-    "Ctrl+D duplicates the library entry — handy for trying a variant without "
-    "losing the original.",
-    "F1 lists all keyboard and mouse shortcuts.",
-)
 TIP_INTERVAL = 15000        # ms between tips
 
 
 class TipStrip(QLabel):
-    """One-line rotating hint in the status bar; a click shows the next one."""
+    """One-line rotating hint in the status bar; a click shows the next one.
+
+    The hints are the catalog keys "tip.1", "tip.2", ...
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.index = int(time.time()) % len(TIPS)
+        self.index = int(time.time())
         self.setTextFormat(Qt.RichText)
         self.setCursor(Qt.PointingHandCursor)
         # Let the status bar shrink the strip instead of widening the window.
@@ -206,14 +316,20 @@ class TipStrip(QLabel):
         self.show_tip()
 
     def show_tip(self):
-        self.setText(f'<span style="color:{theme.ACCENT}; font-weight:bold">TIP</span>'
+        tips = [k for k in i18n.keys("tip.") if k[4:].isdigit()]
+        if not tips:
+            self.setText("")
+            return
+        tip = tr(tips[self.index % len(tips)])
+        self.setText(f'<span style="color:{theme.ACCENT}; font-weight:bold">'
+                     f'{html.escape(tr("tip.label"))}</span>'
                      f'&nbsp;&nbsp;<span style="color:{theme.MUTED}">'
-                     f'{TIPS[self.index]}</span>')
+                     f'{html.escape(tip, quote=False)}</span>')
         # The strip is clipped in a narrow window; the tooltip has the full text.
-        self.setToolTip(f"{TIPS[self.index]}\n\nClick for the next tip")
+        self.setToolTip(f"{tip}\n\n{tr('tip.next')}")
 
     def next_tip(self):
-        self.index = (self.index + 1) % len(TIPS)
+        self.index += 1
         self.show_tip()
 
     def mousePressEvent(self, event):
@@ -542,15 +658,13 @@ class View(QGraphicsView):
             corner = self.mapFromScene(QPointF(0, 0))
             painter.setPen(QColor(theme.MUTED))
             painter.drawText(corner.x(), corner.y() - 7,
-                             f"Game screen  {preset.screen[0]} × {preset.screen[1]} UI units")
+                             tr("canvas.screen", w=preset.screen[0], h=preset.screen[1]))
         else:
             font = painter.font()
             font.setPointSizeF(font.pointSizeF() * 1.35)
             painter.setFont(font)
             painter.setPen(QColor(theme.MUTED))
-            painter.drawText(self.viewport().rect(), Qt.AlignCenter,
-                             "Pick a layout in the library on the left,\n"
-                             "or open one of the game's three preset slots.")
+            painter.drawText(self.viewport().rect(), Qt.AlignCenter, tr("canvas.empty"))
         painter.restore()
 
 
@@ -631,6 +745,14 @@ class CardDelegate(QStyledItemDelegate):
 class PanelDelegate(QStyledItemDelegate):
     """Panel list row: the default checkbox + name, with the panel index at the right."""
 
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        el = index.data(ROLE_EL)
+        if el is not None:      # keep a long name off the index
+            fm = option.fontMetrics
+            room = option.rect.width() - fm.horizontalAdvance(f"#{el.index}") - 48
+            option.text = fm.elidedText(option.text, Qt.ElideRight, max(room, 20))
+
     def paint(self, painter, option, index):
         super().paint(painter, option, index)
         el = index.data(ROLE_EL)
@@ -680,10 +802,10 @@ class CharDelegate(QStyledItemDelegate):
         small = QFont(option.font)
         small.setPointSizeF(small.pointSizeF() * 0.85)
         if card["char"] == self.dialog.current:
-            self.chip(painter, small, QPointF(px + 7, py + 7), "Current",
+            self.chip(painter, small, QPointF(px + 7, py + 7), tr("char.current"),
                       QColor(theme.ACCENT), QColor(theme.ACCENT_TEXT))
         elif gone:
-            self.chip(painter, small, QPointF(px + 7, py + 7), "Not in game",
+            self.chip(painter, small, QPointF(px + 7, py + 7), tr("char.gone"),
                       QColor(0, 0, 0, 190), QColor(theme.TEXT))
 
         y = py + ph + 8
@@ -695,7 +817,8 @@ class CharDelegate(QStyledItemDelegate):
         fm = painter.fontMetrics()
         painter.setPen(QColor(theme.TEXT if card["name"] else theme.DISABLED))
         painter.drawText(QRectF(r.left() + 8, y, width, fm.height()), Qt.AlignCenter,
-                         fm.elidedText(card["name"] or "no name yet", Qt.ElideRight, int(width)))
+                         fm.elidedText(card["name"] or tr("char.noname"), Qt.ElideRight,
+                                       int(width)))
         y += fm.height() + 1
         painter.setFont(option.font)
         fm = painter.fontMetrics()
@@ -707,7 +830,8 @@ class CharDelegate(QStyledItemDelegate):
         fm = painter.fontMetrics()
         painter.setPen(QColor(theme.MUTED))
         painter.drawText(QRectF(r.left() + 8, y, width, fm.height()), Qt.AlignCenter,
-                         "played " + card["when"])
+                         fm.elidedText(tr("char.played", when=card["when"]), Qt.ElideRight,
+                                       int(width)))
         if card["entries"]:
             y += fm.height() + 5
             text = fm.elidedText(", ".join(card["entries"]), Qt.ElideRight, int(width) - 18)
@@ -737,7 +861,7 @@ class CharacterDialog(QDialog):
         super().__init__(parent)
         self.family, self.current = family, current
         self.cards = []
-        self.setWindowTitle("Character of this layout")
+        self.setWindowTitle(tr("char.title"))
         self.resize(1040, 790)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 14, 16, 14)
@@ -745,18 +869,16 @@ class CharacterDialog(QDialog):
 
         top = QHBoxLayout()
         text = QVBoxLayout()
-        title = QLabel("Which character is this layout for?")
+        title = QLabel(tr("char.heading"))
         font = title.font()
         font.setPointSizeF(font.pointSizeF() * 1.25)
         font.setBold(True)
         title.setFont(font)
         text.addWidget(title)
-        text.addWidget(muted_label(
-            f"Family {family}. The skills in the chosen character's quick and cooldown "
-            "slots are stored with the layout."))
+        text.addWidget(muted_label(tr("char.intro", family=family), wrap=True))
         top.addLayout(text, 1)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search name, class or layout")
+        self.search.setPlaceholderText(tr("char.search"))
         self.search.setClearButtonEnabled(True)
         self.search.addAction(theme.icon("search", theme.MUTED), QLineEdit.LeadingPosition)
         self.search.setFixedWidth(290)
@@ -779,23 +901,20 @@ class CharacterDialog(QDialog):
         lay.addWidget(self.list)
 
         row = QHBoxLayout()
-        self.name_btn = QPushButton("Name…")
+        self.name_btn = QPushButton(tr("char.name_btn"))
         self.name_btn.setIcon(theme.icon("pencil"))
-        self.name_btn.setToolTip("The game keeps character names on its servers, "
-                                 "so type it once here  (F2)")
+        self.name_btn.setToolTip(tr("char.name_btn.tip"))
         self.name_btn.setAutoDefault(False)
         self.name_btn.clicked.connect(self.rename)
         QShortcut(QKeySequence(Qt.Key_F2), self).activated.connect(self.rename)
         row.addWidget(self.name_btn)
-        self.all_box = QCheckBox("Show characters that are no longer in the game")
+        self.all_box = QCheckBox(tr("char.show_gone"))
         self.all_box.toggled.connect(self.populate)
         row.addWidget(self.all_box)
         row.addStretch(1)
         box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         self.ok_btn = box.button(QDialogButtonBox.Ok)
-        self.ok_btn.setText("Use this character")
-        self.ok_btn.setIcon(QIcon())
-        box.button(QDialogButtonBox.Cancel).setIcon(QIcon())
+        plain_buttons(box, ok=tr("char.use"))
         box.accepted.connect(self.accept)
         box.rejected.connect(self.reject)
         row.addWidget(box)
@@ -818,7 +937,7 @@ class CharacterDialog(QDialog):
         self.cards = core.char_cards(self.family)
         for card in self.cards:
             card["kind"] = " · ".join(p for p in (card["class"], card["spec"]) if p) \
-                or "class unknown"
+                or tr("char.noclass")
             card["when"] = time.strftime("%d.%m.%Y %H:%M", time.localtime(card["mtime"]))
             card["pixmap"] = (
                 portrait_pixmap(card["portrait"], size.width(), size.height(), 7)
@@ -839,8 +958,9 @@ class CharacterDialog(QDialog):
             item = QListWidgetItem()
             item.setData(ROLE_EL, card["char"])
             item.setData(ROLE_CARD, card)
-            item.setToolTip(f"Character {card['char']}\n{card['cooldown']} cooldown slots, "
-                            f"{card['quick']} quick-slot skills")
+            item.setToolTip(f"{tr('char.id', id=card['char'])}\n"
+                            f"{trn('count.cooldown', card['cooldown'])}, "
+                            f"{trn('count.quick', card['quick'])}")
             self.list.addItem(item)
             if card["char"] == keep:
                 self.list.setCurrentItem(item)
@@ -855,7 +975,7 @@ class CharacterDialog(QDialog):
         if not char:
             return
         old = core.char_registry().get(char, {}).get("name", "")
-        name, ok = QInputDialog.getText(self, "Character name", "Name:", text=old)
+        name, ok = ask_text(self, tr("char.name.title"), tr("char.name.label"), old)
         if ok:
             core.set_char_name(char, name)
             self.fill()
@@ -870,41 +990,35 @@ class ScreenDialog(QDialog):
 
     def __init__(self, parent, screen):
         super().__init__(parent)
-        self.setWindowTitle("Screen size")
+        self.setWindowTitle(tr("screen.title"))
         lay = QVBoxLayout(self)
         lay.setContentsMargins(18, 16, 18, 14)
         lay.setSpacing(12)
-        lay.addWidget(muted_label(
-            "The size of the game window in UI units (pixels divided by the UI scale "
-            "from the game options). Panels keep their relative position — centre / "
-            "screen — like the game does.", wrap=True))
+        lay.addWidget(muted_label(tr("screen.intro"), wrap=True))
         form = QFormLayout()
         self.w, self.h = QSpinBox(), QSpinBox()
         for box, val in ((self.w, screen[0]), (self.h, screen[1])):
             box.setRange(640, 8000)
             box.setValue(val)
-            box.setSuffix(" units")
-        form.addRow("Width", self.w)
-        form.addRow("Height", self.h)
+            box.setSuffix(" " + tr("screen.units"))
+        form.addRow(tr("screen.width"), self.w)
+        form.addRow(tr("screen.height"), self.h)
         self.scale = core.ui_scale()
         self.px = QComboBox()
-        self.px.addItem(f"pick pixels, UI scale {self.scale:g}…")
+        self.px.addItem(tr("screen.pick", scale=f"{self.scale:g}"))
         for w, h in self.WINDOWS:
-            self.px.addItem(f"{w} × {h} px", (w, h))
-        self.px.setToolTip("Fill in the size for a game window of that many pixels, "
-                           "using the UI scale from the game options")
+            self.px.addItem(tr("screen.px", w=w, h=h), (w, h))
+        self.px.setToolTip(tr("screen.pick.tip"))
         self.px.activated.connect(self.from_pixels)
-        form.addRow("From window", self.px)
-        btn = QPushButton("Take from the running game window")
+        form.addRow(tr("screen.from_window"), self.px)
+        btn = QPushButton(tr("screen.from_game"))
         btn.setAutoDefault(False)
         btn.clicked.connect(self.from_game)
         form.addRow("", btn)
         lay.addLayout(form)
 
         box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        box.button(QDialogButtonBox.Ok).setText("Resize")
-        for b in box.buttons():
-            b.setIcon(QIcon())
+        plain_buttons(box, ok=tr("screen.resize"))
         box.accepted.connect(self.accept)
         box.rejected.connect(self.reject)
         lay.addWidget(box)
@@ -920,7 +1034,7 @@ class ScreenDialog(QDialog):
     def from_game(self):
         scr = core.game_window_screen()
         if not scr:
-            QMessageBox.information(self, "bdo-ui", "Game window not found.")
+            notify(self, tr("screen.not_found"))
             return
         self.w.setValue(scr[0])
         self.h.setValue(scr[1])
@@ -929,7 +1043,7 @@ class ScreenDialog(QDialog):
 class ShortcutsDialog(QDialog):
     def __init__(self, parent):
         super().__init__(parent)
-        self.setWindowTitle("Keyboard and mouse")
+        self.setWindowTitle(tr("act.keys"))
         lay = QVBoxLayout(self)
         lay.setContentsMargins(20, 16, 20, 16)
         grid = QGridLayout()
@@ -940,17 +1054,17 @@ class ShortcutsDialog(QDialog):
             if row:
                 grid.setRowMinimumHeight(row, 10)
                 row += 1
-            grid.addWidget(section_label(title), row, 0, 1, 2)
+            grid.addWidget(section_label(tr(title)), row, 0, 1, 2)
             row += 1
             for keys, what in rows:
-                key = QLabel(keys)
+                key = QLabel(tr(keys) if keys.startswith("keys.") else keys)
                 key.setObjectName("key")
                 grid.addWidget(key, row, 0, Qt.AlignLeft)
-                grid.addWidget(QLabel(what), row, 1)
+                grid.addWidget(QLabel(tr(what)), row, 1)
                 row += 1
         lay.addLayout(grid)
         box = QDialogButtonBox(QDialogButtonBox.Close)
-        box.button(QDialogButtonBox.Close).setIcon(QIcon())
+        plain_buttons(box)
         box.rejected.connect(self.reject)
         lay.addWidget(box)
 
@@ -972,10 +1086,12 @@ class Main(QMainWindow):
         self.grid = 0
         self.syncing_selection = False
         self.game_is_running = False
+        self.live_texts = []        # callables that put the translated texts in place
+        self.toolbar_width = 0      # what the toolbar needs with every label shown
 
         fams = core.families()
         if not fams:
-            raise core.BdoUiError(f"no families found under {core.BDO_DIR}")
+            raise core.BdoUiError(tr("err.no_families", path=core.BDO_DIR))
         self.family = fams[0]
 
         self.scene = QGraphicsScene(self)
@@ -1005,18 +1121,37 @@ class Main(QMainWindow):
 
     # ------------------------------------------------------------ UI build
 
+    def live(self, fn):
+        """Run `fn` now and again on every language switch; it sets translated texts."""
+        self.live_texts.append(fn)
+        fn()
+
+    def t(self, setter, key):
+        """Keep a text of the window (label, title, tooltip...) in the current language."""
+        self.live(lambda: setter(tr(key)))
+
+    def follow_tip(self, widget, action):
+        """Give a widget the tooltip of an action, in whatever language that is."""
+        self.live(lambda: widget.setToolTip(action.toolTip()))
+
     def build_actions(self):
-        def mk(text, slot, keys=(), tip=None, icon=None, checkable=False, checked=False):
-            a = QAction(text, self)
+        def mk(key, slot, keys=(), icon=None, checkable=False, checked=False):
+            # `key` is the text; the tooltip is `key`.tip, or the text when there is none.
+            a = QAction(self)
             if icon:
                 a.setIcon(theme.icon(icon))
             keys = [QKeySequence(k) for k in ((keys,) if isinstance(keys, str) else keys)]
             if keys:
                 a.setShortcuts(keys)
-            tip = tip or text.rstrip("…")
-            if keys:
-                tip += f"  ({keys[0].toString(QKeySequence.NativeText)})"
-            a.setToolTip(tip)
+
+            def label():
+                a.setText(tr(key))
+                tip = tr(key + ".tip") if i18n.has(key + ".tip") else tr(key).rstrip("…")
+                if keys:
+                    tip += f"  ({keys[0].toString(QKeySequence.NativeText)})"
+                a.setToolTip(tip)
+
+            self.live(label)
             if checkable:
                 a.setCheckable(True)
                 a.setChecked(checked)
@@ -1026,80 +1161,65 @@ class Main(QMainWindow):
             self.addAction(a)
             return a
 
-        self.act_save = mk("Save", self.save, "Ctrl+S", "Save to the library", "save")
-        self.act_save_as = mk("Save as…", self.save_as, "Ctrl+Shift+S",
-                              "Save to the library under another name")
-        self.act_revert = mk("Revert to saved", self.revert, (),
-                             "Drop the changes and reload the layout", "revert")
-        self.act_rename = mk("Rename…", self.rename_preset, "F2",
-                             "Rename the library entry", "pencil")
-        self.act_duplicate = mk("Duplicate…", self.duplicate_preset, "Ctrl+D",
-                                "Copy the library entry under a new name", "copy")
-        self.act_delete = mk("Delete…", self.delete_preset, (),
-                             "Delete the library entry  (Del)", "trash")
-        self.act_lib_folder = mk("Open library folder", self.open_lib_folder, (),
-                                 "Show the library files in the file manager", "folder")
-        self.act_game_folder = mk("Game folder…", self.change_game_folder, (),
-                                  "Choose the game's 'Black Desert' documents folder")
-        self.act_quit = mk("Quit", self.close, "Ctrl+Q")
+        self.act_save = mk("act.save", self.save, "Ctrl+S", "save")
+        self.act_save_as = mk("act.save_as", self.save_as, "Ctrl+Shift+S")
+        self.act_revert = mk("act.revert", self.revert, (), "revert")
+        self.act_rename = mk("act.rename", self.rename_preset, "F2", "pencil")
+        self.act_duplicate = mk("act.duplicate", self.duplicate_preset, "Ctrl+D", "copy")
+        self.act_delete = mk("act.delete", self.delete_preset, (), "trash")
+        self.act_lib_folder = mk("act.lib_folder", self.open_lib_folder, (), "folder")
+        self.act_game_folder = mk("act.game_folder", self.change_game_folder)
+        self.act_quit = mk("act.quit", self.close, "Ctrl+Q")
 
-        self.act_undo = mk("Undo", self.undo, "Ctrl+Z", icon="undo")
-        self.act_redo = mk("Redo", self.redo, ("Ctrl+Shift+Z", "Ctrl+Y"), icon="redo")
-        self.act_select_all = mk("Select all", self.select_all, "Ctrl+A")
-        self.act_deselect = mk("Select nothing", self.scene.clearSelection, "Esc")
-        self.act_toggle = mk("Show / hide in game", self.toggle_shown, "H",
-                             "Show or hide the selected panels in game", "eye")
+        self.act_undo = mk("act.undo", self.undo, "Ctrl+Z", "undo")
+        self.act_redo = mk("act.redo", self.redo, ("Ctrl+Shift+Z", "Ctrl+Y"), "redo")
+        self.act_select_all = mk("act.select_all", self.select_all, "Ctrl+A")
+        self.act_deselect = mk("act.deselect", self.scene.clearSelection, "Esc")
+        self.act_toggle = mk("act.toggle", self.toggle_shown, "H", "eye")
         self.align_acts = [
-            mk(text, lambda *_, mode=mode: self.align(mode), (), tip, "align_" + mode
-               if mode in ("left", "right", "top", "bottom") else "pack_" + mode)
-            for text, mode, tip in (
-                ("Align left edges", "left", None), ("Align right edges", "right", None),
-                ("Align top edges", "top", None), ("Align bottom edges", "bottom", None),
-                ("Pack into a row", "row", "Put the selected panels side by side, left to right"),
-                ("Pack into a column", "col", "Stack the selected panels, top to bottom"))]
-        self.act_snap = mk("Snap to panels", lambda _: None, (),
-                           "Snap edges to nearby panels and the screen border while dragging",
-                           "magnet", checkable=True, checked=True)
-
-        self.act_char = mk("Character…", self.choose_character, (),
-                           "Bind this library entry to a character: its quick-slot and "
-                           "cooldown-slot skills are stored with the layout", "user")
-        self.act_screen = mk("Screen size…", self.change_screen, (),
-                             "Screen size the layout is made for", "monitor")
-        self.act_get_icons = mk("Download skill icons", self.fetch_icons, (),
-                                "Download missing skill icons of the bound character "
-                                "from bdocodex.com", "download")
-
-        self.act_zoom_in = mk("Zoom in", lambda: self.view.zoom_by(1.25, False),
-                              ("Ctrl+=", "Ctrl++"), icon="zoom_in")
-        self.act_zoom_out = mk("Zoom out", lambda: self.view.zoom_by(1 / 1.25, False),
-                               "Ctrl+-", icon="zoom_out")
-        self.act_fit = mk("Fit screen", self.view.fit, ("F", "Ctrl+0"),
-                          "Fit the whole game screen into the window", "fit")
-        self.act_actual = mk("Zoom to 100%", self.zoom_actual, "Ctrl+1")
-        self.act_hidden = mk("Panels hidden in game", lambda _: self.apply_hidden_filter(), (),
-                             "Draw the panels that are hidden in game as faint outlines",
-                             "ghost", checkable=True, checked=True)
-        self.act_icons = mk("Skill icons", lambda _: self.scene.update(), (),
-                            "Draw skill icons in the slots (needs a bound character)",
-                            "skill", checkable=True, checked=True)
-        self.act_bg_pick = mk("Background screenshot…", self.pick_background, (),
-                              "Show a game screenshot under the layout")
-        self.act_bg = mk("Show background", self.toggle_background, (),
-                         "Show a game screenshot under the layout",
-                         "image", checkable=True)
-        self.act_tips = mk("Tips", self.toggle_tips, (),
-                           "Show a line of hints at the bottom of the window",
+            mk(key, lambda *_, mode=mode: self.align(mode), (), icon)
+            for key, mode, icon in (
+                ("act.align.left", "left", "align_left"),
+                ("act.align.right", "right", "align_right"),
+                ("act.align.top", "top", "align_top"),
+                ("act.align.bottom", "bottom", "align_bottom"),
+                ("act.align.row", "row", "pack_row"),
+                ("act.align.col", "col", "pack_col"))]
+        self.act_snap = mk("act.snap", lambda _: None, (), "magnet",
                            checkable=True, checked=True)
-        self.act_keys = mk("Keyboard and mouse", self.show_shortcuts, "F1", icon="keyboard")
+
+        self.act_char = mk("act.char", self.choose_character, (), "user")
+        self.act_screen = mk("act.screen", self.change_screen, (), "monitor")
+        self.act_get_icons = mk("act.get_icons", self.fetch_icons, (), "download")
+
+        self.act_zoom_in = mk("act.zoom_in", lambda: self.view.zoom_by(1.25, False),
+                              ("Ctrl+=", "Ctrl++"), "zoom_in")
+        self.act_zoom_out = mk("act.zoom_out", lambda: self.view.zoom_by(1 / 1.25, False),
+                               "Ctrl+-", "zoom_out")
+        self.act_fit = mk("act.fit", self.view.fit, ("F", "Ctrl+0"), "fit")
+        self.act_actual = mk("act.actual", self.zoom_actual, "Ctrl+1")
+        self.act_hidden = mk("act.hidden", lambda _: self.apply_hidden_filter(), (),
+                             "ghost", checkable=True, checked=True)
+        self.act_icons = mk("act.icons", lambda _: self.scene.update(), (),
+                            "skill", checkable=True, checked=True)
+        self.act_bg_pick = mk("act.bg_pick", self.pick_background)
+        self.act_bg = mk("act.bg", self.toggle_background, (), "image", checkable=True)
+        self.act_tips = mk("act.tips", self.toggle_tips, checkable=True, checked=True)
+        self.act_keys = mk("act.keys", self.show_shortcuts, "F1", "keyboard")
 
     def build_menus(self):
-        self.slot_menu = QMenu("Write to game slot", self)
+        def menu(parent, key):
+            m = parent.addMenu("")
+            self.t(m.setTitle, key)
+            return m
+
+        self.slot_menu = QMenu(self)
+        self.t(self.slot_menu.setTitle, "menu.write")
         self.slot_menu.setIcon(theme.icon("write"))
         self.slot_menu.aboutToShow.connect(lambda: self.fill_slot_menu(self.slot_menu))
 
         bar = self.menuBar()
-        m = bar.addMenu("&File")
+        m = menu(bar, "menu.file")
         m.addActions([self.act_save, self.act_save_as, self.act_revert])
         m.addSeparator()
         m.addActions([self.act_rename, self.act_duplicate, self.act_delete])
@@ -1110,23 +1230,23 @@ class Main(QMainWindow):
         m.addSeparator()
         m.addAction(self.act_quit)
 
-        m = bar.addMenu("&Edit")
+        m = menu(bar, "menu.edit")
         m.addActions([self.act_undo, self.act_redo])
         m.addSeparator()
         m.addActions([self.act_select_all, self.act_deselect])
         m.addSeparator()
         m.addAction(self.act_toggle)
-        self.align_menu = m.addMenu("Align")
+        self.align_menu = menu(m, "menu.align")
         self.align_menu.addActions(self.align_acts[:4])
         self.align_menu.addSeparator()
         self.align_menu.addActions(self.align_acts[4:])
         m.addSeparator()
         m.addAction(self.act_snap)
 
-        m = bar.addMenu("&Layout")
+        m = menu(bar, "menu.layout")
         m.addActions([self.act_char, self.act_screen, self.act_get_icons])
 
-        m = bar.addMenu("&View")
+        m = menu(bar, "menu.view")
         m.addActions([self.act_zoom_in, self.act_zoom_out, self.act_fit, self.act_actual])
         m.addSeparator()
         m.addActions([self.act_hidden, self.act_icons])
@@ -1134,12 +1254,42 @@ class Main(QMainWindow):
         m.addActions([self.act_bg_pick, self.act_bg])
         m.addSeparator()
         m.addAction(self.act_tips)
+        m.addMenu(self.build_language_menu())
 
-        m = bar.addMenu("&Help")
+        m = menu(bar, "menu.help")
         m.addAction(self.act_keys)
 
+    def build_language_menu(self):
+        """One entry per catalog found in lang/, plus "as the system"."""
+        self.lang_menu = QMenu(self)
+        self.lang_menu.setIcon(theme.icon("globe"))
+
+        def title():
+            # Findable in a language one cannot read.
+            text = tr("menu.language")
+            self.lang_menu.setTitle(text if text == "Language" else f"{text} (Language)")
+
+        self.live(title)
+        group = QActionGroup(self)
+        names = i18n.names()
+        self.lang_acts = {}
+        for code in (LANG_AUTO, *names):
+            a = QAction(names.get(code, ""), self)
+            a.setCheckable(True)
+            a.triggered.connect(lambda _=False, code=code: self.set_language(code))
+            group.addAction(a)
+            self.lang_menu.addAction(a)
+            self.lang_acts[code] = a
+            if code == LANG_AUTO:
+                self.lang_menu.addSeparator()
+        self.live(lambda: self.lang_acts[LANG_AUTO].setText(
+            tr("lang.auto", name=names.get(system_language(), system_language()))))
+        self.lang_acts[configured_language()].setChecked(True)
+        return self.lang_menu
+
     def build_toolbar(self):
-        tb = self.addToolBar("main")
+        tb = self.toolbar = QToolBar()
+        self.addToolBar(tb)
         tb.setMovable(False)
         tb.setIconSize(QSize(20, 20))
         tb.setContextMenuPolicy(Qt.PreventContextMenu)
@@ -1156,11 +1306,17 @@ class Main(QMainWindow):
         tb.addAction(self.act_snap)
         self.grid_box = QSpinBox()
         self.grid_box.setRange(0, 100)
-        self.grid_box.setPrefix("Grid ")
-        self.grid_box.setSpecialValueText("Grid off")
-        self.grid_box.setToolTip("Snap dragged panels to a grid of this many UI units "
-                                 "(replaces snapping to panels)")
-        self.grid_box.setFixedWidth(104)
+
+        def grid_texts():
+            prefix, off = tr("grid.prefix") + " ", tr("grid.off")
+            self.grid_box.setPrefix(prefix)
+            self.grid_box.setSpecialValueText(off)
+            self.grid_box.setToolTip(tr("grid.tip"))
+            fm = self.grid_box.fontMetrics()
+            self.grid_box.setFixedWidth(max(104, 38 + max(
+                fm.horizontalAdvance(off), fm.horizontalAdvance(prefix + "100"))))
+
+        self.live(grid_texts)
         self.grid_box.valueChanged.connect(self.grid_changed)
         tb.addWidget(self.grid_box)
         tb.addSeparator()
@@ -1185,9 +1341,14 @@ class Main(QMainWindow):
             b.setIconSize(QSize(18, 18))
             return b
 
+        def section(key):
+            label = section_label()
+            self.t(label.setText, key)
+            return label
+
         def search_box(placeholder, slot):
             box = QLineEdit()
-            box.setPlaceholderText(placeholder)
+            self.t(box.setPlaceholderText, placeholder)
             box.setClearButtonEnabled(True)
             box.addAction(theme.icon("search", theme.MUTED), QLineEdit.LeadingPosition)
             box.textChanged.connect(slot)
@@ -1201,12 +1362,12 @@ class Main(QMainWindow):
         lay.setSpacing(8)
         row = QHBoxLayout()
         row.setSpacing(0)
-        row.addWidget(section_label("Library"))
+        row.addWidget(section("side.library"))
         row.addStretch(1)
         for a in (self.act_duplicate, self.act_rename, self.act_delete):
             row.addWidget(flat(a))
         lay.addLayout(row)
-        self.lib_search = search_box("Search layouts", self.filter_library)
+        self.lib_search = search_box("side.search", self.filter_library)
         QShortcut(QKeySequence("Ctrl+F"), self).activated.connect(self.focus_search)
         lay.addWidget(self.lib_search)
 
@@ -1223,28 +1384,29 @@ class Main(QMainWindow):
         delete.setContext(Qt.WidgetShortcut)
         delete.activated.connect(self.delete_preset)
         lay.addWidget(self.sources, 1)
-        self.lib_empty = muted_label(
-            "The library is empty.\nOpen a game slot below and save it "
-            "to keep that layout here.", wrap=True)
+        self.lib_empty = muted_label(wrap=True)
+        self.t(self.lib_empty.setText, "side.empty")
         lay.addWidget(self.lib_empty)
 
         row = QHBoxLayout()
-        row.addWidget(section_label("Game slots"))
+        row.addWidget(section("side.slots"))
         row.addStretch(1)
         self.lock_icon = QLabel()
         self.lock_icon.setPixmap(theme.pixmap("lock", theme.WARN, 16))
-        self.lock_text = QLabel("read-only")
+        self.lock_text = ElidedLabel()
+        self.t(self.lock_text.setText, "side.readonly")
         self.lock_text.setObjectName("warn")
         row.addWidget(self.lock_icon)
         row.addWidget(self.lock_text)
         lay.addSpacing(6)
         lay.addLayout(row)
         row = QHBoxLayout()
-        row.addWidget(muted_label("Family"))
+        family_label = muted_label()
+        self.t(family_label.setText, "side.family")
+        row.addWidget(family_label)
         self.family_box = QComboBox()
         self.family_box.addItems(fams)
-        self.family_box.setToolTip("Game account (family) whose three preset slots are "
-                                   "shown and written; the one played last comes first")
+        self.t(self.family_box.setToolTip, "side.family.tip")
         self.family_box.currentTextChanged.connect(self.family_changed)
         row.addWidget(self.family_box, 1)
         lay.addLayout(row)
@@ -1269,22 +1431,24 @@ class Main(QMainWindow):
         row = QHBoxLayout(bar)
         row.setContentsMargins(14, 7, 8, 7)
         row.setSpacing(10)
-        self.doc_title = QLabel()
+        self.doc_title = ElidedLabel()
         font = self.doc_title.font()
         font.setPointSizeF(font.pointSizeF() * 1.25)
         font.setBold(True)
         self.doc_title.setFont(font)
         row.addWidget(self.doc_title)
         self.doc_badge = Pill(dot=False)
-        self.doc_badge.set("Unsaved changes", theme.ACCENT)
+        self.live(lambda: self.doc_badge.set(tr("doc.unsaved"), theme.ACCENT))
         row.addWidget(self.doc_badge)
-        self.doc_source = muted_label()
-        row.addWidget(self.doc_source)
-        row.addStretch(1)
+        # The note takes whatever room is left and is the first thing to be cut.
+        self.doc_source = ElidedLabel()
+        self.doc_source.setObjectName("muted")
+        self.doc_source.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        row.addWidget(self.doc_source, 1)
         row.addWidget(flat(self.act_zoom_out))
         self.zoom_btn = QToolButton()
         self.zoom_btn.setObjectName("flat")
-        self.zoom_btn.setToolTip("Zoom; click for 100%  (Ctrl+1)")
+        self.t(self.zoom_btn.setToolTip, "zoom.tip")
         self.zoom_btn.setMinimumWidth(54)
         self.zoom_btn.clicked.connect(self.zoom_actual)
         row.addWidget(self.zoom_btn)
@@ -1300,7 +1464,7 @@ class Main(QMainWindow):
         lay.setContentsMargins(12, 12, 12, 12)
         lay.setSpacing(8)
 
-        lay.addWidget(section_label("Layout"))
+        lay.addWidget(section("side.layout"))
         card = QFrame()
         card.setObjectName("card")
         grid = QGridLayout(card)
@@ -1312,15 +1476,15 @@ class Main(QMainWindow):
         grid.addWidget(self.char_thumb, 0, 0)
         col = QVBoxLayout()
         col.setSpacing(1)
-        self.char_name = QLabel()
-        self.char_name.setMinimumWidth(40)
-        self.char_sub = muted_label()
+        self.char_name = ElidedLabel()
+        self.char_sub = ElidedLabel()
+        self.char_sub.setObjectName("muted")
         col.addWidget(self.char_name)
         col.addWidget(self.char_sub)
         grid.addLayout(col, 0, 1)
-        self.char_btn = QPushButton("Change…")
+        self.char_btn = QPushButton()          # labelled by update_title()
         self.char_btn.setObjectName("small")
-        self.char_btn.setToolTip(self.act_char.toolTip())
+        self.follow_tip(self.char_btn, self.act_char)
         self.char_btn.clicked.connect(self.choose_character)
         grid.addWidget(self.char_btn, 0, 2)
         screen_icon = QLabel()
@@ -1329,25 +1493,27 @@ class Main(QMainWindow):
         grid.addWidget(screen_icon, 1, 0)
         self.screen_label = QLabel()
         grid.addWidget(self.screen_label, 1, 1)
-        self.screen_btn = QPushButton("Resize…")
+        self.screen_btn = QPushButton()
+        self.t(self.screen_btn.setText, "insp.resize")
         self.screen_btn.setObjectName("small")
-        self.screen_btn.setToolTip(self.act_screen.toolTip())
+        self.follow_tip(self.screen_btn, self.act_screen)
         self.screen_btn.clicked.connect(self.change_screen)
         grid.addWidget(self.screen_btn, 1, 2)
         self.icons_label = QLabel()
         self.icons_label.setObjectName("warn")
         self.icons_label.setWordWrap(True)
         grid.addWidget(self.icons_label, 2, 0, 1, 2)
-        self.icons_btn = QPushButton("Download")
+        self.icons_btn = QPushButton()
+        self.t(self.icons_btn.setText, "insp.download")
         self.icons_btn.setObjectName("small")
-        self.icons_btn.setToolTip(self.act_get_icons.toolTip())
+        self.follow_tip(self.icons_btn, self.act_get_icons)
         self.icons_btn.clicked.connect(self.fetch_icons)
         grid.addWidget(self.icons_btn, 2, 2)
         grid.setColumnStretch(1, 1)
         lay.addWidget(card)
 
         lay.addSpacing(6)
-        lay.addWidget(section_label("Selection"))
+        lay.addWidget(section("side.selection"))
         card = QFrame()
         card.setObjectName("card")
         col = QVBoxLayout(card)
@@ -1368,13 +1534,14 @@ class Main(QMainWindow):
             box.setRange(-4000, 12000)
             box.setPrefix(name)
             box.setKeyboardTracking(False)
-            box.setToolTip("Position of the top-left corner in UI units")
+            self.t(box.setToolTip, "insp.pos.tip")
             box.valueChanged.connect(self.spin_changed)
             row.addWidget(box, 1)
         col.addLayout(row)
         row = QHBoxLayout()
-        self.vis_box = QCheckBox("Visible in game")
-        self.vis_box.setToolTip(self.act_toggle.toolTip())
+        self.vis_box = QCheckBox()
+        self.t(self.vis_box.setText, "insp.visible")
+        self.follow_tip(self.vis_box, self.act_toggle)
         self.vis_box.clicked.connect(lambda _: self.toggle_shown())
         row.addWidget(self.vis_box)
         row.addStretch(1)
@@ -1389,19 +1556,19 @@ class Main(QMainWindow):
 
         lay.addSpacing(6)
         row = QHBoxLayout()
-        row.addWidget(section_label("Panels"))
+        row.addWidget(section("side.panels"))
         row.addStretch(1)
         self.panel_count = muted_label()
         row.addWidget(self.panel_count)
         lay.addLayout(row)
-        self.panel_search = search_box("Filter panels", self.filter_panels)
+        self.panel_search = search_box("side.filter", self.filter_panels)
         lay.addWidget(self.panel_search)
         self.panel_list = QListWidget()
         self.panel_list.setObjectName("panels")
         self.panel_list.setItemDelegate(PanelDelegate(self))
         self.panel_list.setSelectionMode(QListWidget.ExtendedSelection)
         self.panel_list.setVerticalScrollMode(QListWidget.ScrollPerPixel)
-        self.panel_list.setToolTip("Checkbox = visible in game")
+        self.t(self.panel_list.setToolTip, "side.check.tip")
         self.panel_list.itemSelectionChanged.connect(self.list_selection_changed)
         self.panel_list.itemChanged.connect(self.list_item_changed)
         lay.addWidget(self.panel_list, 1)
@@ -1409,7 +1576,7 @@ class Main(QMainWindow):
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setHandleWidth(4)
         self.splitter.setChildrenCollapsible(False)
-        for i, (widget, minimum) in enumerate(((left, 230), (centre, 360), (right, 280))):
+        for i, (widget, minimum) in enumerate(((left, 250), (centre, 360), (right, 280))):
             widget.setMinimumWidth(minimum)
             self.splitter.addWidget(widget)
             self.splitter.setStretchFactor(i, 1 if widget is centre else 0)
@@ -1460,6 +1627,40 @@ class Main(QMainWindow):
         except OSError:
             pass
 
+    # ------------------------------------------------------------ language
+
+    def set_language(self, choice):
+        """Switch the interface language now and remember the choice."""
+        apply_language(choice)
+        try:
+            core.save_config(language=choice)
+        except OSError:
+            pass
+        self.retranslate()
+
+    def retranslate(self):
+        """Put the current language on everything that is already on screen."""
+        for fn in self.live_texts:
+            fn()
+        self.panel_list.blockSignals(True)
+        for r in range(self.panel_list.count()):
+            row = self.panel_list.item(r)
+            el = row.data(ROLE_EL)
+            row.setText(el.label())
+            if not el.positioned:
+                row.setToolTip(tr("panel.nopos.tip"))
+        self.panel_list.blockSignals(False)
+        self.filter_panels()
+        self.statusBar().clearMessage()
+        self.tips.show_tip()
+        self.refresh_sources()
+        self.set_game_running(self.game_is_running)
+        if self.preset:
+            self.load_icons()           # panel tooltips
+        self.update_inspector()
+        self.update_title()
+        self.view.viewport().update()
+
     # ------------------------------------------------------------ sources
 
     def is_open(self, kind):
@@ -1480,13 +1681,14 @@ class Main(QMainWindow):
             thumb = portrait_pixmap(portrait, 38, 38, 7, 0.28) if portrait else None
             screen = core.lib_meta(name).get("screen") or ()
             note = fmt_screen(screen) if len(screen) == 2 else ""
-            sub = text or "No character"
+            sub = text or tr("card.nochar")
             it = QListWidgetItem()
             it.setData(ROLE_KIND, ("lib", name))
             it.setData(ROLE_CARD, {
                 "kind": ("lib", name), "title": name, "sub": sub, "note": note,
                 "thumb": thumb or letter_pixmap(name[:1].upper(), 38, 38, 7)})
-            it.setToolTip(f"{name}\n{sub}" + (f"\nScreen {note} UI units" if note else ""))
+            it.setToolTip(f"{name}\n{sub}"
+                          + ("\n" + tr("card.screen.tip", size=note) if note else ""))
             self.sources.addItem(it)
             if name == (self.preset.name if self.preset and self.preset.name else keep):
                 self.sources.setCurrentItem(it)
@@ -1499,20 +1701,21 @@ class Main(QMainWindow):
         except (core.BdoUiError, OSError) as e:
             slots = {}
             self.statusBar().showMessage(str(e))
-        entries = [(f"Slot {i + 1}", str(i + 1), t) for i, t in enumerate(core.SLOT_TAGS)]
-        entries.append(("Game default", "D", core.REVERT_TAG))
+        entries = [(tr("slot.n", n=i + 1), str(i + 1), t)
+                   for i, t in enumerate(core.SLOT_TAGS)]
+        entries.append((tr("slot.default"), tr("slot.default.letter"), core.REVERT_TAG))
         for text, letter, tag in entries:
             els = slots.get(tag, [])
             it = QListWidgetItem()
             if core.slot_is_empty(els):
-                sub = "empty"
+                sub = tr("slot.empty")
                 it.setFlags(Qt.NoItemFlags)
             else:
                 count = sum(1 for e in els if e.index is not None)
-                sub = f"{fmt_screen(core.estimate_screen(els))}  ·  {count} panels"
+                sub = (f"{fmt_screen(core.estimate_screen(els))}  ·  "
+                       f"{trn('count.panels', count)}")
                 it.setData(ROLE_KIND, ("slot", tag))
-                it.setToolTip("Open a copy of this game slot; it becomes a library "
-                              "entry when saved")
+                it.setToolTip(tr("slot.open.tip"))
             it.setData(ROLE_CARD, {"kind": ("slot", tag), "title": text, "sub": sub,
                                    "thumb": letter_pixmap(letter, 30, 30, 6)})
             self.slots.addItem(it)
@@ -1551,7 +1754,7 @@ class Main(QMainWindow):
             else:
                 preset = core.preset_from_slot(self.family, kind[1])
         except (core.BdoUiError, OSError, ValueError) as e:
-            QMessageBox.warning(self, "bdo-ui", str(e))
+            warn(self, str(e))
             return False
         self.open_preset(preset)
         self.refresh_sources()
@@ -1566,8 +1769,7 @@ class Main(QMainWindow):
             kind = ("slot", self.preset.meta["from"])
         else:
             return
-        if self.dirty and QMessageBox.question(
-                self, "bdo-ui", "Drop all unsaved changes of this layout?") != QMessageBox.Yes:
+        if self.dirty and ask(self, tr("msg.revert")) != "yes":
             return
         self.open_source(kind)
 
@@ -1582,10 +1784,10 @@ class Main(QMainWindow):
         self.sources.setCurrentItem(item)
         name = item.data(ROLE_KIND)[1]
         menu = QMenu(self)
-        menu.addAction("Open", lambda *_: self.request_open(("lib", name)))
+        menu.addAction(tr("ctx.open"), lambda *_: self.request_open(("lib", name)))
         menu.addSeparator()
         menu.addActions([self.act_rename, self.act_duplicate])
-        write = menu.addMenu("Write to game slot")
+        write = menu.addMenu(tr("menu.write"))
         write.setIcon(theme.icon("write"))
         self.fill_slot_menu(write, name)
         write.setEnabled(not self.game_is_running)
@@ -1599,8 +1801,8 @@ class Main(QMainWindow):
         if not kind:
             return
         menu = QMenu(self)
-        menu.addAction("Open", lambda *_: self.request_open(kind))
-        save = menu.addAction("Save to the library…",
+        menu.addAction(tr("ctx.open"), lambda *_: self.request_open(kind))
+        save = menu.addAction(tr("ctx.save_lib"),
                               lambda *_: self.save_slot_to_library(kind))
         save.setIcon(theme.icon("save"))
         menu.exec(self.slots.viewport().mapToGlobal(pos))
@@ -1613,67 +1815,67 @@ class Main(QMainWindow):
 
     def ask_name(self, title, label, text=""):
         """Ask for a library name; returns a valid name or None."""
-        name, ok = QInputDialog.getText(self, title, label, text=text)
+        name, ok = ask_text(self, title, label, text)
         name = name.strip()
         if not ok or not name:
             return None
         try:
             return core.check_name(name)
         except core.BdoUiError as e:
-            QMessageBox.warning(self, "bdo-ui", str(e))
+            warn(self, str(e))
             return None
 
     def rename_preset(self):
         old = self.current_lib_name()
         if not old:
             return
-        new = self.ask_name("Rename layout", "New name:", old)
+        new = self.ask_name(tr("dlg.rename.title"), tr("dlg.rename.label"), old)
         if not new or new == old:
             return
         try:
             core.lib_rename(old, new)
         except (core.BdoUiError, OSError) as e:
-            QMessageBox.warning(self, "bdo-ui", str(e))
+            warn(self, str(e))
             return
         if self.preset and self.preset.name == old:
             self.preset.name = new
-        self.after_library_change(f"Renamed “{old}” to “{new}”", select=new)
+        self.after_library_change(tr("status.renamed", old=old, new=new), select=new)
 
     def duplicate_preset(self):
         old = self.current_lib_name()
         if not old:
             return
-        new = self.ask_name("Duplicate layout", f"Name of the copy of “{old}”:", old + " copy")
+        new = self.ask_name(tr("dlg.duplicate.title"), tr("dlg.duplicate.label", name=old),
+                            tr("dlg.duplicate.default", name=old))
         if not new:
             return
         try:
             if core.lib_path(new).exists():
-                raise core.BdoUiError(f"preset {new!r} already exists")
+                raise core.BdoUiError(tr("err.exists", name=new))
             core.lib_save(core.lib_load(old), new)
             profile = core.profile_for_preset(old)
             if profile:
                 core.save_profile(new, profile)
         except (core.BdoUiError, OSError, ValueError) as e:
-            QMessageBox.warning(self, "bdo-ui", str(e))
+            warn(self, str(e))
             return
-        self.after_library_change(f"“{old}” copied to “{new}”", select=new)
+        self.after_library_change(tr("status.copied", old=old, new=new), select=new)
 
     def delete_preset(self):
         name = self.current_lib_name()
         if not name:
             return
-        if QMessageBox.question(self, "bdo-ui", f"Delete layout “{name}” from the library?") \
-                != QMessageBox.Yes:
+        if ask(self, tr("msg.delete", name=name)) != "yes":
             return
         try:
             core.lib_delete(name)
         except (core.BdoUiError, OSError) as e:
-            QMessageBox.warning(self, "bdo-ui", str(e))
+            warn(self, str(e))
             return
         if self.preset and self.preset.name == name:
             self.preset.name = None
             self.dirty = True
-        self.after_library_change(f"Deleted “{name}”")
+        self.after_library_change(tr("status.deleted", name=name))
 
     def after_library_change(self, message, select=None):
         self.known_lib = core.lib_list()
@@ -1722,7 +1924,7 @@ class Main(QMainWindow):
             row.setData(ROLE_EL, el)
             if not el.positioned:
                 row.setForeground(QColor(theme.MUTED))
-                row.setToolTip("No position stored: only visibility can be changed")
+                row.setToolTip(tr("panel.nopos.tip"))
             self.panel_list.addItem(row)
             if el.positioned:
                 item = PanelItem(el, core.panel_size(el, preset.screen), self)
@@ -1768,8 +1970,7 @@ class Main(QMainWindow):
         if not self.preset:
             return
         if not self.preset.name:
-            QMessageBox.information(self, "bdo-ui",
-                                    "Save the layout to the library first, then bind it.")
+            notify(self, tr("msg.save_first"))
             return
         old = core.profile_for_preset(self.preset.name)
         family = (old or {}).get("family") or self.family
@@ -1782,31 +1983,29 @@ class Main(QMainWindow):
         try:
             core.save_profile(self.preset.name, core.capture_profile(family, char, keep=old))
         except (core.BdoUiError, OSError) as e:
-            QMessageBox.warning(self, "bdo-ui", str(e))
+            warn(self, str(e))
             return
         _, missing = self.load_icons()
         self.refresh_sources()
         self.update_title()
+        who = {"name": self.preset.name, "char": core.char_title(family, char)}
         self.statusBar().showMessage(
-            f"“{self.preset.name}” is bound to {core.char_title(family, char)}"
-            + (f"; {missing} skill icons are not downloaded yet" if missing else ""), 10000)
+            trn("status.bound.missing", missing, **who) if missing
+            else tr("status.bound", **who), 10000)
 
     def fetch_icons(self):
         profile, missing = self.load_icons() if self.preset else (None, 0)
         if not profile:
-            QMessageBox.information(
-                self, "bdo-ui",
-                "This layout has no character yet.\n\nSkill icons are drawn for the "
-                "skills of the character bound to the layout (Layout → Character…).")
+            notify(self, tr("msg.no_char"))
             return
         if not missing:
-            self.statusBar().showMessage("All skill icons are already downloaded", 5000)
+            self.statusBar().showMessage(tr("status.icons_all"), 5000)
             return
         done = [0]
 
         def progress(_):
             done[0] += 1
-            self.statusBar().showMessage(f"Downloading skill icons… {done[0]}")
+            self.statusBar().showMessage(tr("status.downloading", n=done[0]))
             QApplication.processEvents()
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -1817,7 +2016,8 @@ class Main(QMainWindow):
         self.load_icons()
         self.update_title()
         self.statusBar().showMessage(
-            f"{fetched} icons downloaded" + (f", {len(failed)} failed" if failed else ""), 8000)
+            trn("status.icons_done", fetched)
+            + (tr("status.icons_failed", n=len(failed)) if failed else ""), 8000)
 
     def snapshot(self):
         pos = tuple((int(i.pos().x()), int(i.pos().y())) for i in self.items)
@@ -1886,12 +2086,10 @@ class Main(QMainWindow):
     def confirm_discard(self):
         if not (self.preset and self.dirty):
             return True
-        r = QMessageBox.question(
-            self, "bdo-ui", "The current layout has unsaved changes. Save them?",
-            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
-        if r == QMessageBox.Save:
+        r = ask(self, tr("msg.unsaved"), "save", "discard", "cancel")
+        if r == "save":
             return self.save()
-        return r == QMessageBox.Discard
+        return r == "discard"
 
     def save(self):
         if not self.preset:
@@ -1903,11 +2101,12 @@ class Main(QMainWindow):
     def save_as(self):
         if not self.preset:
             return False
-        name = self.ask_name("Save layout", "Name in the library:", self.preset.name or "")
+        name = self.ask_name(tr("dlg.save.title"), tr("dlg.save.label"),
+                             self.preset.name or "")
         if not name:
             return False
-        if core.lib_path(name).exists() and name != self.preset.name and QMessageBox.question(
-                self, "bdo-ui", f"Overwrite existing layout “{name}”?") != QMessageBox.Yes:
+        if core.lib_path(name).exists() and name != self.preset.name and ask(
+                self, tr("msg.overwrite", name=name)) != "yes":
             return False
         return self.do_save(name)
 
@@ -1918,7 +2117,7 @@ class Main(QMainWindow):
             core.lib_save(self.preset, name)
             self.store_slot_contents(old_name, name)
         except (core.BdoUiError, OSError) as e:
-            QMessageBox.warning(self, "bdo-ui", str(e))
+            warn(self, str(e))
             return False
         self.load_icons()
         self.dirty = False
@@ -1927,7 +2126,7 @@ class Main(QMainWindow):
         self.known_lib = core.lib_list()
         self.refresh_sources()
         self.update_title()
-        self.statusBar().showMessage(f"Saved “{name}”", 4000)
+        self.statusBar().showMessage(tr("status.saved", name=name), 4000)
         return True
 
     def store_slot_contents(self, old_name, name):
@@ -1942,37 +2141,33 @@ class Main(QMainWindow):
         if not chars:
             return
         when = time.strftime("%Y-%m-%d %H:%M", time.localtime(chars[0][0]))
-        if QMessageBox.question(
-                self, "bdo-ui",
-                f"Store the skills sitting in the quick and cooldown slots with “{name}”?\n\n"
-                f"They are read from the character played last "
-                f"({core.char_title(self.family, chars[0][1])}, {when}).\n"
-                "Choose No if this layout belongs to another character; pick it "
-                "later with Layout → Character…") == QMessageBox.Yes:
+        if ask(self, tr("msg.store_skills", name=name, when=when,
+                        char=core.char_title(self.family, chars[0][1]))) == "yes":
             core.save_profile(name, core.capture_profile(self.family, chars[0][1]))
 
     def restore_slot_contents(self, name):
-        """After writing a layout, offer to put the stored slot contents back."""
+        """After writing a layout, offer to put the stored slot contents back.
+
+        Returns how many slots were restored.
+        """
         profile = core.profile_for_preset(name)
         if not profile:
-            return ""
+            return 0
         try:
             _, _, _, changes = core.plan_skills(profile)
             if not changes:
-                return ""
+                return 0
             shown = "\n".join("  " + c for c in changes[:12])
-            more = f"\n  … and {len(changes) - 12} more" if len(changes) > 12 else ""
-            if QMessageBox.question(
-                    self, "bdo-ui",
-                    f"Character {profile['char']} differs from the slot contents stored "
-                    f"with “{name}”:\n\n{shown}{more}\n\nRestore them too?"
-                    ) != QMessageBox.Yes:
-                return ""
+            if len(changes) > 12:
+                shown += "\n  " + tr("msg.restore.more", n=len(changes) - 12)
+            if ask(self, tr("msg.restore", char=profile["char"], name=name,
+                            changes=shown)) != "yes":
+                return 0
             core.apply_skills(profile)
-            return f" {len(changes)} slot contents restored."
+            return len(changes)
         except (core.BdoUiError, OSError) as e:
-            QMessageBox.warning(self, "bdo-ui", str(e))
-            return ""
+            warn(self, str(e))
+            return 0
 
     def fill_slot_menu(self, menu, lib_name=None):
         """Three "write here" entries that say what each game slot holds now."""
@@ -1984,11 +2179,11 @@ class Main(QMainWindow):
         for i, tag in enumerate(core.SLOT_TAGS):
             els = slots.get(tag, [])
             if core.slot_is_empty(els):
-                now = "empty"
+                now = tr("slot.empty")
             else:
                 count = sum(1 for e in els if e.index is not None)
-                now = f"{fmt_screen(core.estimate_screen(els))}, {count} panels"
-            menu.addAction(f"Slot {i + 1}   —   now {now}",
+                now = f"{fmt_screen(core.estimate_screen(els))}, {trn('count.panels', count)}"
+            menu.addAction(tr("slot.now", n=i + 1, now=now),
                            lambda *_, i=i: self.write_slot(i, lib_name))
 
     def write_slot(self, slot, lib_name=None):
@@ -1998,38 +2193,35 @@ class Main(QMainWindow):
             try:
                 preset = core.lib_load(lib_name)
             except (core.BdoUiError, OSError, ValueError) as e:
-                QMessageBox.warning(self, "bdo-ui", str(e))
+                warn(self, str(e))
                 return
         if not preset:
             return
         if core.game_running():
             self.set_game_running(True)
-            QMessageBox.warning(
-                self, "bdo-ui",
-                "Black Desert is running.\n\nThe game rewrites its settings file while "
-                "it runs, so the change would be lost. Close the game and try again.")
+            warn(self, tr("msg.running"))
             return
-        name = preset.name or "unsaved layout"
-        note = ("\n\nIt has unsaved changes; the slot gets the layout as it is on "
-                "the canvas now." if preset is self.preset and self.dirty else "")
-        if QMessageBox.question(
-                self, "bdo-ui",
-                f"Replace game slot {slot + 1} of family {self.family} with “{name}”?{note}\n\n"
-                "The current file is committed to the settings repo and copied to "
-                f"{core.BACKUP_DIR} first.") != QMessageBox.Yes:
+        question = [tr("msg.write", slot=slot + 1, family=self.family,
+                       name=preset.name or tr("doc.unsaved_name"))]
+        if preset is self.preset and self.dirty:
+            question.append(tr("msg.write.dirty"))
+        question.append(tr("msg.write.backup", path=core.BACKUP_DIR))
+        if ask(self, "\n\n".join(question)) != "yes":
             return
         if preset is self.preset:
             self.sync_model()
         try:
             backup = core.write_slot(self.family, slot, [e.copy() for e in preset.els])
         except (core.BdoUiError, OSError) as e:
-            QMessageBox.warning(self, "bdo-ui", str(e))
+            warn(self, str(e))
             return
-        extra = self.restore_slot_contents(preset.name) if preset.name else ""
+        restored = self.restore_slot_contents(preset.name) if preset.name else 0
         self.refresh_sources()
-        self.statusBar().showMessage(
-            f"Slot {slot + 1} written.{extra} Backup: {backup}. "
-            f"In game: Edit UI → load preset {slot + 1}.", 15000)
+        report = [tr("status.written", slot=slot + 1)]
+        if restored:
+            report.append(trn("status.restored", restored))
+        report += [tr("status.backup", path=backup), tr("status.ingame", slot=slot + 1)]
+        self.statusBar().showMessage(" ".join(report), 15000)
 
     # ------------------------------------------------------------ editing
 
@@ -2092,7 +2284,7 @@ class Main(QMainWindow):
     def align(self, mode):
         sel = self.selected_items()
         if len(sel) < 2:
-            self.statusBar().showMessage("Select two or more panels to align", 4000)
+            self.statusBar().showMessage(tr("status.align_need"), 4000)
             return
         self.loading = True
         if mode == "left":
@@ -2225,21 +2417,20 @@ class Main(QMainWindow):
         rows = self.panel_list.selectedItems() if self.preset else []
         items = self.selected_items()
         if not rows:
-            title = "Nothing selected"
-            sub = ("Click a panel on the canvas or in the list below."
-                   if self.preset else "No layout is open.")
+            title = tr("insp.none")
+            sub = tr("insp.none.hint") if self.preset else tr("insp.nolayout")
         elif len(rows) == 1:
             el = rows[0].data(ROLE_EL)
             title = el.label()
             if items:
-                sub = f"#{el.index}  ·  {items[0].size[0]} × {items[0].size[1]} units"
+                sub = tr("insp.size", index=el.index, w=items[0].size[0], h=items[0].size[1])
                 if items[0].skill:
                     sub += f"\n{items[0].skill}"
             else:
-                sub = f"#{el.index}  ·  no position stored, only visibility can be changed"
+                sub = tr("insp.nopos", index=el.index)
         else:
-            title = f"{len(rows)} panels selected"
-            sub = "X and Y move the whole group."
+            title = trn("insp.multi", len(rows))
+            sub = tr("insp.multi.hint")
         self.sel_title.setText(title)
         self.sel_sub.setText(sub)
         for box in (self.x_box, self.y_box):
@@ -2252,7 +2443,8 @@ class Main(QMainWindow):
                                    Qt.Checked if all(shown) else Qt.PartiallyChecked)
         if self.preset:
             els = [e for e in self.preset.els if e.index is not None]
-            self.panel_count.setText(f"{sum(e.shown for e in els)} of {len(els)} visible in game")
+            self.panel_count.setText(
+                trn("insp.visible_count", sum(e.shown for e in els), total=len(els)))
         else:
             self.panel_count.setText("")
         self.update_actions()
@@ -2291,7 +2483,7 @@ class Main(QMainWindow):
     def canvas_menu(self):
         menu = QMenu(self)
         menu.addAction(self.act_toggle)
-        sub = menu.addMenu("Align")
+        sub = menu.addMenu(tr("menu.align"))
         sub.addActions(self.align_acts[:4])
         sub.addSeparator()
         sub.addActions(self.align_acts[4:])
@@ -2319,7 +2511,8 @@ class Main(QMainWindow):
     def pick_background(self):
         start = str(core.BDO_DIR / "ScreenShot")
         path, _ = QFileDialog.getOpenFileName(
-            self, "Game screenshot", start, "Images (*.jpg *.jpeg *.png *.bmp)")
+            self, tr("dlg.bg.title"), start,
+            f"{tr('dlg.bg.filter')} (*.jpg *.jpeg *.png *.bmp)")
         if not path:
             return False
         self.bg_path = path
@@ -2370,7 +2563,7 @@ class Main(QMainWindow):
         self.family_box.blockSignals(False)
         self.family = fams[0]
         self.refresh_sources()
-        self.statusBar().showMessage(f"Game folder: {core.BDO_DIR}", 8000)
+        self.statusBar().showMessage(tr("status.game_folder", path=core.BDO_DIR), 8000)
 
     def refresh_status(self):
         # Pick up presets added or removed outside this window (CLI, another run).
@@ -2383,21 +2576,34 @@ class Main(QMainWindow):
     def set_game_running(self, running):
         self.game_is_running = bool(running)
         if running:
-            self.game_pill.set("Game is running — slots are read-only", theme.WARN)
-            self.write_btn.setText("Game is running")
+            self.game_pill.set(tr("game.running"), theme.WARN)
+            self.write_btn.setText(tr("write.running"))
             self.write_btn.setIcon(theme.icon("lock", theme.MUTED, disabled=theme.MUTED))
-            self.write_btn.setToolTip(
-                "Close Black Desert to write a slot: the game rewrites its settings "
-                "file while it runs, so the change would be lost")
+            self.write_btn.setToolTip(tr("write.running.tip"))
         else:
-            self.game_pill.set("Game is closed — slots can be written", theme.OK)
-            self.write_btn.setText("Write to game slot")
+            self.game_pill.set(tr("game.closed"), theme.OK)
+            self.write_btn.setText(tr("menu.write"))
             self.write_btn.setIcon(theme.icon("write", theme.ACCENT_TEXT, disabled=theme.MUTED))
-            self.write_btn.setToolTip(
-                "Put this layout into one of the three in-game preset slots")
+            self.write_btn.setToolTip(tr("write.tip"))
         self.lock_icon.setVisible(self.game_is_running)
         self.lock_text.setVisible(self.game_is_running)
         self.update_actions()
+        self.fit_toolbar(measure=True)
+
+    def fit_toolbar(self, measure=False):
+        """Drop the text of the Save button when the toolbar would not fit the window."""
+        button = self.toolbar.widgetForAction(self.act_save)
+        if measure:
+            button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+            self.toolbar_width = self.toolbar.sizeHint().width()
+        style = (Qt.ToolButtonIconOnly if self.toolbar_width > self.width()
+                 else Qt.ToolButtonTextBesideIcon)
+        if button.toolButtonStyle() != style:
+            button.setToolButtonStyle(style)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.fit_toolbar()
 
     def update_actions(self):
         has = self.preset is not None
@@ -2426,7 +2632,7 @@ class Main(QMainWindow):
     def update_title(self):
         """Refresh everything that describes the open layout as a whole."""
         preset = self.preset
-        name = (preset.name or "Untitled layout") if preset else "No layout open"
+        name = (preset.name or tr("doc.untitled")) if preset else tr("doc.none")
         self.setWindowTitle(f"{name}[*] — bdo-ui")
         self.setWindowModified(bool(preset and self.dirty))
         self.doc_title.setText(name)
@@ -2435,36 +2641,38 @@ class Main(QMainWindow):
         if preset and not preset.name:
             tag = preset.meta.get("from")
             if tag in core.SLOT_TAGS:
-                source = f"copy of game slot {core.SLOT_TAGS.index(tag) + 1}, "
+                source = tr("doc.from_slot", n=core.SLOT_TAGS.index(tag) + 1)
             elif tag == core.REVERT_TAG:
-                source = "copy of the game default, "
-            source += "not in the library yet"
+                source = tr("doc.from_default")
+            else:
+                source = tr("doc.not_saved")
         self.doc_source.setText(source)
 
         parts, portrait = profile_parts(self.profile) if preset else ([], None)
         thumb = portrait_pixmap(portrait, 40, 40, 7, 0.28) if portrait else None
         self.char_thumb.setPixmap(thumb or theme.pixmap("user", theme.MUTED, 40))
         if not preset:
-            head, sub = "No layout open", ""
+            head, sub = tr("doc.none"), ""
         elif self.profile:
             head = parts[0]
-            sub = " · ".join(parts[1:]) or f"id …{str(self.profile.get('char', ''))[-8:]}"
+            sub = " · ".join(parts[1:]) or tr(
+                "insp.char_id", id=str(self.profile.get("char", ""))[-8:])
         else:
-            head, sub = "No character", "no skills stored"
+            head, sub = tr("insp.nochar"), tr("insp.noskills")
         self.char_name.setText(head)
         self.char_sub.setText(sub)
         self.char_thumb.setToolTip(
-            f"Character {self.profile.get('char', '')}" if preset and self.profile else "")
-        self.char_btn.setText("Change…" if self.profile else "Choose…")
+            tr("char.id", id=self.profile.get("char", "")) if preset and self.profile else "")
+        self.char_btn.setText(tr("insp.change") if self.profile else tr("insp.choose"))
         self.char_btn.setEnabled(preset is not None)
         self.screen_label.setText(
             f"{preset.screen[0]} × {preset.screen[1]}" if preset else "")
-        self.screen_label.setToolTip("Size of the game screen in UI units")
+        self.screen_label.setToolTip(tr("insp.screen.tip"))
         self.screen_btn.setEnabled(preset is not None)
         missing = self.missing_icons if preset else 0
         self.icons_label.setVisible(missing > 0)
         self.icons_btn.setVisible(missing > 0)
-        self.icons_label.setText(f"{missing} skill icons are not downloaded")
+        self.icons_label.setText(trn("insp.icons_missing", missing))
         self.zoom_changed()
         self.sources.viewport().update()
         self.slots.viewport().update()
@@ -2484,17 +2692,17 @@ def pick_game_folder(parent=None):
     start = str(core.BDO_DIR if core.BDO_DIR.is_dir() else core.Path.home())
     while True:
         path = QFileDialog.getExistingDirectory(
-            parent, "Choose the 'Black Desert' folder (the one with UserCache inside)", start)
+            parent, tr("dlg.folder.title"), start)
         if not path:
             return False
         try:
             core.set_docs(path)
             if core.families():
                 return True
-            problem = "No family folders with saved settings in there yet."
+            problem = tr("msg.no_families")
         except core.BdoUiError as e:
             problem = str(e)
-        QMessageBox.warning(parent, "bdo-ui", problem)
+        warn(parent, problem)
         start = path
 
 
@@ -2503,13 +2711,9 @@ def run(open_name=None):
     app.setApplicationName("bdo-ui")
     app.setDesktopFileName("bdo-ui")
     theme.apply(app)
+    apply_language(configured_language())
     if not core.docs_valid():
-        QMessageBox.information(
-            None, "bdo-ui",
-            "Black Desert settings were not found automatically.\n\n"
-            f"Looked in: {core.BDO_DIR}\n\n"
-            "Choose the game's 'Black Desert' documents folder — the one that "
-            "contains GameOption.txt and UserCache. It will be remembered.")
+        notify(None, tr("msg.not_found", path=core.BDO_DIR))
         if not pick_game_folder():
             return 1
     win = Main()
