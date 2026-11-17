@@ -21,7 +21,13 @@ load it with the usual preset button.
 
 ## Install
 
-Needs Python 3.10 or newer.
+**Windows, nothing to install.** Download
+`bdo-ui-<version>-windows-x64.zip` from the
+[latest release](https://github.com/m3rcur1e/bdo-ui-presets/releases/latest),
+unpack it into any folder you can write to and start `bdo-ui.bat`. Python and
+Qt are inside the package. Newer versions are installed by the editor itself.
+
+**From source, Linux and Windows.** Needs Python 3.10 or newer.
 
 ```
 pip install -r requirements.txt
@@ -31,6 +37,9 @@ Run the editor:
 
 - Linux: `python3 main.py`
 - Windows: `bdo-ui.bat`
+
+The Windows package is built with `python3 tools/build_windows.py` on any
+system.
 
 The game's `Black Desert` documents folder is found automatically. If it is
 not, the editor asks for it on start; in a terminal use `bdo-ui docs <path>`.
