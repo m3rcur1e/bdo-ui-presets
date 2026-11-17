@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 m3rcur1e
 """Self-update from the project's GitHub repository.
 
 The installed version is the VERSION file next to this module. A newer one is
@@ -30,6 +32,7 @@ BRANCH = "main"
 VERSION_URL = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/VERSION"
 ARCHIVE_URL = f"https://github.com/{REPO}/archive/refs/heads/{BRANCH}.zip"
 PAGE_URL = f"https://github.com/{REPO}"
+COPYRIGHT = "Copyright © 2026 m3rcur1e"
 
 APP_DIR = Path(__file__).resolve().parent
 BACKUP_DIR = APP_DIR / ".update-backup"

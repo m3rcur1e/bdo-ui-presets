@@ -67,6 +67,11 @@
  "act.tips": "Подсказки",
  "act.tips.tip": "Показывать строку с подсказками внизу окна",
  "act.keys": "Клавиатура и мышь",
+ "act.about": "О программе bdo-ui",
+ "about.what": "Библиотека и редактор раскладок интерфейса Black Desert Online.",
+ "about.license": "Свободная программа под лицензией GNU General Public License версии 3 или новее. Никаких гарантий не даётся.",
+ "about.source": "Исходный код и оригинальная версия:<br>{link}",
+ "about.disclaimer": "Не связана с Pearl Abyss. Black Desert — товарный знак правообладателя.",
 
  "btn.ok": "ОК",
  "btn.cancel": "Отмена",

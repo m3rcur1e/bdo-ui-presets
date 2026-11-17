@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 m3rcur1e
 """PySide6 editor for BDO UI presets: drag panels on a canvas, keep a library."""
 
 import html
@@ -1115,6 +1117,44 @@ class ShortcutsDialog(QDialog):
         lay.addWidget(box)
 
 
+class AboutDialog(QDialog):
+    """Who wrote the program, its licence and where the original lives."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle(tr("act.about"))
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(24, 20, 24, 16)
+        lay.setSpacing(10)
+        name = QLabel(f"bdo-ui {html.escape(updater.local_version())}")
+        font = name.font()
+        font.setPointSizeF(font.pointSizeF() * 1.5)
+        font.setBold(True)
+        name.setFont(font)
+        lay.addWidget(name)
+        link = (f'<a href="{updater.PAGE_URL}" style="color: {theme.ACCENT}">'
+                f'{html.escape(updater.PAGE_URL.split("//", 1)[1])}</a>')
+        texts = [(tr("about.what"), False),
+                 (html.escape(updater.COPYRIGHT), False),
+                 (html.escape(tr("about.license")), False),
+                 (tr("about.source", link=link), False),
+                 (html.escape(tr("about.disclaimer")), True)]
+        for text, muted in texts:
+            label = QLabel(text)
+            label.setTextFormat(Qt.RichText)
+            label.setWordWrap(True)
+            label.setOpenExternalLinks(True)
+            label.setTextInteractionFlags(Qt.TextBrowserInteraction)
+            if muted:
+                label.setObjectName("muted")
+            lay.addWidget(label)
+        self.setMinimumWidth(440)
+        box = QDialogButtonBox(QDialogButtonBox.Close)
+        plain_buttons(box)
+        box.rejected.connect(self.reject)
+        lay.addWidget(box)
+
+
 # ---------------------------------------------------------------- main window
 
 class Main(QMainWindow):
@@ -1263,6 +1303,7 @@ class Main(QMainWindow):
         self.act_tips = mk("act.tips", self.toggle_tips, checkable=True, checked=True)
         self.act_keys = mk("act.keys", self.show_shortcuts, "F1", "keyboard")
         self.act_update = mk("act.update", lambda: self.check_updates(True))
+        self.act_about = mk("act.about", self.show_about)
         self.act_update_auto = mk("act.update_auto", lambda _: None,
                                   checkable=True, checked=True)
 
@@ -1319,6 +1360,8 @@ class Main(QMainWindow):
         m.addAction(self.act_keys)
         m.addSeparator()
         m.addActions([self.act_update, self.act_update_auto])
+        m.addSeparator()
+        m.addAction(self.act_about)
 
     def build_language_menu(self):
         """One entry per catalog found in lang/, plus "as the system"."""
@@ -2687,6 +2730,9 @@ class Main(QMainWindow):
 
     def show_shortcuts(self):
         ShortcutsDialog(self).exec()
+
+    def show_about(self):
+        AboutDialog(self).exec()
 
     # ------------------------------------------------------------ misc
 

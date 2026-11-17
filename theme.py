@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 m3rcur1e
 """Look of the editor: palette, stylesheet and hand-drawn icons.
 
 Nothing here depends on the platform: the style is Qt's own Fusion, colours

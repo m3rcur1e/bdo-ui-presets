@@ -67,6 +67,11 @@
  "act.tips": "Tips",
  "act.tips.tip": "Show a line of hints at the bottom of the window",
  "act.keys": "Keyboard and mouse",
+ "act.about": "About bdo-ui",
+ "about.what": "Library and editor for Black Desert Online UI presets.",
+ "about.license": "Free software under the GNU General Public License, version 3 or later. It comes with no warranty.",
+ "about.source": "Source code and the original version:<br>{link}",
+ "about.disclaimer": "Not affiliated with Pearl Abyss. Black Desert is a trademark of its owner.",
 
  "btn.ok": "OK",
  "btn.cancel": "Cancel",

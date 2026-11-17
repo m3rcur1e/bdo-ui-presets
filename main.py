@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 m3rcur1e
 """bdo-ui: library and editor for Black Desert UI presets.
 
     bdo-ui                       open the editor

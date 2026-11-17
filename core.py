@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 m3rcur1e
 """BDO UI preset library: parse / edit / write the UISettingPreset slots.
 
 The game keeps three UI preset slots per family in

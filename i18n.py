@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 m3rcur1e
 """Interface languages: one JSON catalog per language, picked at run time.
 
     lang/en.json    the source catalog: every key the program uses

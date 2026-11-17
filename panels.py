@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 m3rcur1e
 """Panel index -> name / known size tables for BDO UI presets.
 
 Names come from CppEnums.PAGameUIType (decompiled client lua, 2022 dump).
