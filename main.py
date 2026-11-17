@@ -18,6 +18,9 @@
                                  so the editor can draw them in the slots
     bdo-ui docs [path]           show, or set and remember, the game's
                                  'Black Desert' documents folder
+    bdo-ui update                install the newest version from GitHub;
+                                 --check only says whether there is one
+    bdo-ui --version             the installed version
 """
 
 import argparse
@@ -170,6 +173,23 @@ def cmd_docs(args):
         print(f"config: {core.CONFIG_PATH}")
 
 
+def cmd_update(args):
+    import updater
+    try:
+        newer = updater.check()
+        if not newer:
+            print(f"bdo-ui {updater.local_version()} is the latest version")
+            return 0
+        print(f"version {newer} is available (installed: {updater.local_version()})")
+        if args.check:
+            return 0
+        print(f"now at version {updater.install()}")
+    except updater.UpdateError as e:
+        print(f"bdo-ui: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_gui(args):
     import gui
     return gui.run(getattr(args, "name", None))
@@ -178,6 +198,7 @@ def cmd_gui(args):
 def main():
     ap = argparse.ArgumentParser(prog="bdo-ui", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--version", action="store_true", help="print the installed version")
     ap.add_argument("--family", help="family id (default: most recently played)")
     sub = ap.add_subparsers(dest="cmd")
     sub.add_parser("list").set_defaults(fn=cmd_list)
@@ -213,10 +234,17 @@ def main():
     p = sub.add_parser("docs")
     p.add_argument("path", nargs="?")
     p.set_defaults(fn=cmd_docs)
+    p = sub.add_parser("update")
+    p.add_argument("--check", action="store_true", help="only look, do not install")
+    p.set_defaults(fn=cmd_update)
     p = sub.add_parser("edit")
     p.add_argument("name")
     p.set_defaults(fn=cmd_gui)
     args = ap.parse_args()
+    if args.version:
+        import updater
+        print(updater.local_version())
+        return 0
     try:
         return (args.fn if args.cmd else cmd_gui)(args) or 0
     except core.BdoUiError as e:

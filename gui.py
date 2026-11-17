@@ -5,7 +5,7 @@ import sys
 import threading
 import time
 
-from PySide6.QtCore import (QByteArray, QLibraryInfo, QLocale, QObject, QPointF, QRectF,
+from PySide6.QtCore import (QByteArray, QLibraryInfo, QLocale, QObject, QPointF, QProcess, QRectF,
                             QSize, Qt, QTimer, QTranslator, QUrl, Signal)
 from PySide6.QtGui import (QAction, QActionGroup, QBrush, QColor, QDesktopServices,
                            QFont, QIcon, QImage, QKeySequence, QPainter, QPainterPath,
@@ -25,6 +25,7 @@ import core
 import i18n
 import panels
 import theme
+import updater
 from i18n import tr, trn
 
 COLORS = {
@@ -404,6 +405,51 @@ class GameWatch(QObject):
             self.result.emit(running)
         except RuntimeError:
             pass                      # the window is already gone
+
+
+class UpdateWatch(QObject):
+    """Looks for a newer version, and installs it, off the GUI thread."""
+
+    checked = Signal(object, bool)      # newer version or None, asked by the user
+    failed = Signal(str, bool)          # problem, asked by the user
+    installed = Signal(str)             # version the program folder is at now
+    install_failed = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.busy = False
+
+    def start(self, work, *args):
+        if self.busy:
+            return False
+        self.busy = True
+        threading.Thread(target=work, args=args, daemon=True).start()
+        return True
+
+    def emit(self, signal, *values):
+        self.busy = False
+        try:
+            signal.emit(*values)
+        except RuntimeError:
+            pass                      # the window is already gone
+
+    def check(self, manual):
+        return self.start(self.do_check, manual)
+
+    def do_check(self, manual):
+        try:
+            self.emit(self.checked, updater.check(), manual)
+        except Exception as e:        # no network must never break the editor
+            self.emit(self.failed, str(e), manual)
+
+    def install(self):
+        return self.start(self.do_install)
+
+    def do_install(self):
+        try:
+            self.emit(self.installed, updater.install())
+        except Exception as e:
+            self.emit(self.install_failed, str(e))
 
 
 # ---------------------------------------------------------------- canvas
@@ -1086,6 +1132,8 @@ class Main(QMainWindow):
         self.grid = 0
         self.syncing_selection = False
         self.game_is_running = False
+        self.new_version = None     # a newer version found on GitHub
+        self.restart_on_close = False
         self.live_texts = []        # callables that put the translated texts in place
         self.toolbar_width = 0      # what the toolbar needs with every label shown
 
@@ -1107,6 +1155,14 @@ class Main(QMainWindow):
         self.resize(1500, 950)
         self.restore_ui_state()
 
+        self.update_watch = UpdateWatch(self)
+        self.update_watch.checked.connect(self.update_checked)
+        self.update_watch.failed.connect(self.update_check_failed)
+        self.update_watch.installed.connect(self.update_installed)
+        self.update_watch.install_failed.connect(self.update_install_failed)
+        # Looked at when the timer fires, so switching it off right away works too.
+        QTimer.singleShot(2000, lambda: self.act_update_auto.isChecked()
+                          and self.isVisible() and self.check_updates(False))
         self.watch = GameWatch(self)
         self.watch.result.connect(self.set_game_running)
         self.timer = QTimer(self)
@@ -1206,6 +1262,9 @@ class Main(QMainWindow):
         self.act_bg = mk("act.bg", self.toggle_background, (), "image", checkable=True)
         self.act_tips = mk("act.tips", self.toggle_tips, checkable=True, checked=True)
         self.act_keys = mk("act.keys", self.show_shortcuts, "F1", "keyboard")
+        self.act_update = mk("act.update", lambda: self.check_updates(True))
+        self.act_update_auto = mk("act.update_auto", lambda _: None,
+                                  checkable=True, checked=True)
 
     def build_menus(self):
         def menu(parent, key):
@@ -1258,6 +1317,8 @@ class Main(QMainWindow):
 
         m = menu(bar, "menu.help")
         m.addAction(self.act_keys)
+        m.addSeparator()
+        m.addActions([self.act_update, self.act_update_auto])
 
     def build_language_menu(self):
         """One entry per catalog found in lang/, plus "as the system"."""
@@ -1591,6 +1652,17 @@ class Main(QMainWindow):
         self.tips = TipStrip()
         bar.addWidget(self.tips, 1)
         self.tips.setVisible(self.act_tips.isChecked())
+        self.update_btn = QPushButton()
+        self.update_btn.setObjectName("update")
+        self.update_btn.setCursor(Qt.PointingHandCursor)
+        self.update_btn.setStyleSheet(
+            f"QPushButton#update {{ background: {theme.ACCENT}; color: {theme.ACCENT_TEXT};"
+            f" border: none; border-radius: 9px; padding: 2px 12px; font-weight: bold; }}"
+            f"QPushButton#update:hover {{ background: {theme.ACCENT_HOVER}; }}")
+        self.update_btn.clicked.connect(self.install_update)
+        self.update_btn.hide()
+        self.live(self.label_update_btn)
+        bar.addPermanentWidget(self.update_btn)
         self.cursor_label = QLabel()
         self.cursor_label.setMinimumWidth(110)
         bar.addPermanentWidget(self.cursor_label)
@@ -1613,6 +1685,7 @@ class Main(QMainWindow):
             self.grid_box.setValue(int(state.get("grid", 0)))
             self.act_tips.setChecked(bool(state.get("tips", True)))
             self.tips.setVisible(self.act_tips.isChecked())
+            self.act_update_auto.setChecked(bool(state.get("updates", True)))
         except (AttributeError, TypeError, ValueError):
             pass                      # a damaged config only loses the window layout
 
@@ -1623,9 +1696,73 @@ class Main(QMainWindow):
                 "splitter": self.splitter.sizes(),
                 "snap": self.act_snap.isChecked(), "hidden": self.act_hidden.isChecked(),
                 "icons": self.act_icons.isChecked(), "grid": self.grid,
-                "tips": self.act_tips.isChecked()})
+                "tips": self.act_tips.isChecked(),
+                "updates": self.act_update_auto.isChecked()})
         except OSError:
             pass
+
+    # ------------------------------------------------------------ updates
+
+    def label_update_btn(self):
+        self.update_btn.setText(tr("update.button", version=self.new_version or ""))
+        self.update_btn.setToolTip(tr("update.button.tip"))
+
+    def check_updates(self, manual):
+        if not self.update_watch.check(manual) and manual:
+            self.statusBar().showMessage(tr("update.busy"), 4000)
+        elif manual:
+            self.statusBar().showMessage(tr("update.checking"))
+
+    def update_checked(self, version, manual):
+        self.new_version = version
+        self.label_update_btn()
+        self.update_btn.setVisible(bool(version))
+        if not manual:
+            return
+        self.statusBar().clearMessage()
+        if version:
+            self.install_update()
+        else:
+            notify(self, tr("update.latest", version=updater.local_version()))
+
+    def update_check_failed(self, problem, manual):
+        if manual:                  # a silent check at start stays silent
+            self.statusBar().clearMessage()
+            warn(self, problem)
+
+    def install_update(self):
+        if not self.new_version:
+            return
+        if ask(self, tr("update.ask", new=self.new_version,
+                        old=updater.local_version())) != "yes":
+            return
+        if self.update_watch.install():
+            self.update_btn.setEnabled(False)
+            self.statusBar().showMessage(tr("update.installing", version=self.new_version))
+        else:
+            self.statusBar().showMessage(tr("update.busy"), 4000)
+
+    def update_installed(self, version):
+        self.statusBar().clearMessage()
+        self.new_version = None
+        self.update_btn.setEnabled(True)
+        self.update_btn.hide()
+        if ask(self, tr("update.done", version=version)) == "yes":
+            self.restart_on_close = True
+            if not self.close():        # unsaved changes kept the window open
+                self.restart_on_close = False
+
+    def update_install_failed(self, problem):
+        self.statusBar().clearMessage()
+        self.update_btn.setEnabled(True)
+        warn(self, tr("update.failed", problem=problem, url=updater.PAGE_URL))
+
+    def restart(self):
+        """Start the program again, on the entry that is open now."""
+        args = [sys.argv[0]] if sys.argv and sys.argv[0] else []
+        if args and self.preset and self.preset.name:
+            args += ["edit", self.preset.name]
+        QProcess.startDetached(sys.executable, args)
 
     # ------------------------------------------------------------ language
 
@@ -2683,6 +2820,8 @@ class Main(QMainWindow):
             self.timer.stop()
             self.save_ui_state()
             event.accept()
+            if self.restart_on_close:
+                self.restart()
         else:
             event.ignore()
 
