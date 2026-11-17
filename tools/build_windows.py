@@ -215,7 +215,7 @@ def build(out):
     program = sources()
     version = program["VERSION"].decode().strip()
     files.update(program)
-    languages = {PurePosixPath(n).stem for n in program if n.startswith("lang/")}
+    languages = {PurePosixPath(n).stem for n in program if n.startswith("bdo_ui/lang/")}
 
     with zipfile.ZipFile(io.BytesIO(fetch(PYTHON_URL, PYTHON_SHA256, cache))) as z:
         for n in z.namelist():

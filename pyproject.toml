@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bdo-ui"
+dynamic = ["version"]
+description = "Library and editor for Black Desert Online UI presets"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+dependencies = ["PySide6>=6.5"]
+
+[project.urls]
+Homepage = "https://github.com/m3rcur1e/bdo-ui-presets"
+
+[project.scripts]
+bdo-ui = "bdo_ui.cli:main"
+
+[tool.setuptools.dynamic]
+version = {file = "VERSION"}
+
+[tool.setuptools.packages.find]
+include = ["bdo_ui*"]
+
+[tool.setuptools.package-data]
+bdo_ui = ["lang/*.json"]

@@ -5,3 +5,5 @@ __pycache__/
 .envrc
 .directory
 dist/
+build/
+*.egg-info/

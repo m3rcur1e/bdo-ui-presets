@@ -10,10 +10,10 @@ placeholders ("{name}"). A counted text is a list of plural forms, chosen by
 the catalog's "@plural" rule, which is a gettext Plural-Forms expression of n.
 "@language" is the language's own name, shown in the Language menu.
 
-Nothing here needs Qt, so core.py and the command line can use it too. Until
+Nothing here needs Qt, so the core package and the command line can use it too. Until
 set_language() is called everything is English, which is what the CLI gets.
 
-    python3 i18n.py [code ...]     check the catalogs (all of them by default)
+    python3 -m bdo_ui.i18n [code ...]     check the catalogs (all of them by default)
 """
 
 import gettext
@@ -185,7 +185,7 @@ def code_keys(root=None):
     """Every string literal of the program's .py files (catalog keys are among them)."""
     import ast
     strings = set()
-    for path in sorted(Path(root or Path(__file__).resolve().parent).glob("*.py")):
+    for path in sorted(Path(root or Path(__file__).resolve().parent).rglob("*.py")):
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 strings.add(node.value)

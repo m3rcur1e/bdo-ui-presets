@@ -15,6 +15,7 @@ replaced files kept in .update-backup/. Only the standard library is used and
 nothing but the fixed GitHub URLs below is contacted.
 """
 
+import importlib.metadata
 import io
 import os
 import shutil
@@ -25,7 +26,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from i18n import tr
+from .i18n import tr
 
 REPO = "m3rcur1e/bdo-ui-presets"
 BRANCH = "main"
@@ -34,12 +35,13 @@ ARCHIVE_URL = f"https://github.com/{REPO}/archive/refs/heads/{BRANCH}.zip"
 PAGE_URL = f"https://github.com/{REPO}"
 COPYRIGHT = "Copyright © 2026 m3rcur1e"
 
-APP_DIR = Path(__file__).resolve().parent
+# The program folder: main.py, VERSION and this package in it.
+APP_DIR = Path(__file__).resolve().parent.parent
 BACKUP_DIR = APP_DIR / ".update-backup"
 USER_AGENT = "bdo-ui-updater"
 TIMEOUT = 10                        # seconds, per request
 MAX_ARCHIVE = 64 * 1024 * 1024      # refuse anything larger than this
-REQUIRED = ("main.py", "core.py", "gui.py", "VERSION")
+REQUIRED = ("main.py", "bdo_ui/__init__.py", "bdo_ui/cli.py", "VERSION")
 
 
 class UpdateError(Exception):
@@ -61,7 +63,19 @@ def local_version(folder=None):
     try:
         return (Path(folder or APP_DIR) / "VERSION").read_text(encoding="utf-8").strip()
     except OSError:
-        return "0"
+        pass
+    if folder is None:
+        # Installed with pip: there is no program folder, ask the package metadata.
+        try:
+            return importlib.metadata.version("bdo-ui")
+        except importlib.metadata.PackageNotFoundError:
+            pass
+    return "0"
+
+
+def is_program_folder():
+    """False for a copy installed with pip, which this module must not touch."""
+    return (APP_DIR / "VERSION").is_file() and (APP_DIR / "main.py").is_file()
 
 
 def _fetch(url, limit):
@@ -89,6 +103,8 @@ def remote_version():
 
 def check():
     """The version available on GitHub if it is newer than this copy, else None."""
+    if not is_program_folder():
+        raise UpdateError(tr("update.err.package"))
     remote = remote_version()
     return remote if parse_version(remote) > parse_version(local_version()) else None
 
@@ -167,6 +183,8 @@ def _copy_over(source, version_from):
 
 def install():
     """Update the program folder; return the version it is at afterwards."""
+    if not is_program_folder():
+        raise UpdateError(tr("update.err.package"))
     before = local_version()
     if is_git_checkout():
         _pull()

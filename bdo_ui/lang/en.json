@@ -369,5 +369,6 @@
  "update.err.same": "The download is not newer than version {version}.",
  "update.err.write": "Could not write to {folder}: {reason}",
  "update.err.git": "git could not update the folder: {reason}",
- "update.err.branch": "This copy is a git checkout on the branch “{branch}”, not “{main}” — update it with git."
+ "update.err.branch": "This copy is a git checkout on the branch “{branch}”, not “{main}” — update it with git.",
+ "update.err.package": "This copy was installed with pip — update it with pip."
 }

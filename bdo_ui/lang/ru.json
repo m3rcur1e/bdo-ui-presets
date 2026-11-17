@@ -369,5 +369,6 @@
  "update.err.same": "Скачанная версия не новее {version}.",
  "update.err.write": "Не удалось записать в {folder}: {reason}",
  "update.err.git": "git не смог обновить папку: {reason}",
- "update.err.branch": "Эта копия — git-репозиторий на ветке «{branch}», а не «{main}»: обновите её через git."
+ "update.err.branch": "Эта копия — git-репозиторий на ветке «{branch}», а не «{main}»: обновите её через git.",
+ "update.err.package": "Эта копия установлена через pip — обновите её через pip."
 }

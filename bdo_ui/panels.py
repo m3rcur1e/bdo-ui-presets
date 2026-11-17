@@ -8,7 +8,7 @@ The names themselves are in the language catalogs (lang/*.json) under the
 keys "panel.<index>"; a new known panel is one more key in lang/en.json.
 """
 
-import i18n
+from . import i18n
 
 CHAT = 32
 # Panel index -> slot number as the game shows it.

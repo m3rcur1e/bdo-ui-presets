@@ -369,5 +369,6 @@
  "update.err.same": "Завантажена версія не новіша за {version}.",
  "update.err.write": "Не вдалося записати в {folder}: {reason}",
  "update.err.git": "git не зміг оновити теку: {reason}",
- "update.err.branch": "Ця копія — git-репозиторій на гілці «{branch}», а не «{main}»: оновіть її через git."
+ "update.err.branch": "Ця копія — git-репозиторій на гілці «{branch}», а не «{main}»: оновіть її через git.",
+ "update.err.package": "Цю копію встановлено через pip — оновіть її через pip."
 }
