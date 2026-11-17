@@ -7,6 +7,8 @@ belongs to the family, not to a character. `bdo-ui` keeps any number of layouts
 on disk and puts the one you need into one of the three game slots. In game you
 load it with the usual preset button.
 
+![The editor: library on the left, the game screen in the middle, the selection on the right](https://raw.githubusercontent.com/m3rcur1e/bdo-ui-presets/media/editor.png)
+
 - Drag-and-drop editor for the panels, with snapping, align tools and undo.
 - A library entry holds the layout and, optionally, what sits in the slots of
   a character: cooldown slots, quick slots and hotkey captions.
@@ -14,6 +16,8 @@ load it with the usual preset button.
 - Command line for everything the editor does.
 - Interface in English, Russian and Ukrainian.
 - Works on Linux (Steam + Proton) and Windows.
+
+![Cooldown and quick slots drawn with the icons of the skills in them](https://raw.githubusercontent.com/m3rcur1e/bdo-ui-presets/media/slots.png)
 
 ## Install
 
@@ -40,6 +44,8 @@ assistant that is asked to install the tool.
 bdo-ui                       open the editor
 bdo-ui edit <name>           open the editor on a library preset
 bdo-ui list                  library presets and the game slots
+bdo-ui show <name>           panels of a preset: position, size, visibility
+bdo-ui set <name> <panel>..  move, show or hide panels of a library preset
 bdo-ui save <name> <slot>    copy game slot 1..3 into the library
 bdo-ui load <name> <slot>    put a library preset into game slot 1..3
 bdo-ui skills <profile>      put a skill profile into its character file
@@ -50,7 +56,13 @@ bdo-ui update                install the newest version from GitHub
 bdo-ui --version             the installed version
 ```
 
-`python3 main.py --help` lists the options of each command.
+`python3 main.py <command> --help` describes the options of a command.
+
+## Scripts and AI assistants
+
+`list`, `show`, `set` and `chars` take `--json`, and a layout can be changed
+without the editor: `show --json`, edit the positions, `set --from`.
+[AGENTS.md](AGENTS.md) describes the commands, the formats and the rules.
 
 ## How it stays safe
 
