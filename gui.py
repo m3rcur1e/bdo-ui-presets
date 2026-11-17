@@ -154,6 +154,76 @@ def profile_parts(profile):
     return parts or [f"char …{char[-8:]}"], core.portrait_path(char)
 
 
+TIPS = (
+    "Drag a panel to move it; arrow keys nudge it by 1 unit, Shift+arrows by 10.",
+    "Layouts only reach the game through a slot: press “Write to game slot”, then "
+    "in game open Edit UI and load that preset.",
+    "Slots can be written only while Black Desert is closed — the running game "
+    "rewrites its settings file on exit.",
+    "Every write to a game slot keeps a copy of the game's file in the library's "
+    ".backups folder.",
+    "Press H to show or hide the selected panels in game; hidden ones stay on the "
+    "canvas as faint outlines.",
+    "Hold Space and drag, or drag with the middle button, to pan. The wheel zooms "
+    "at the cursor, F fits the whole screen.",
+    "View → Background screenshot… puts a game screenshot under the layout, so "
+    "panels can be placed around your character.",
+    "Select several panels with Ctrl+click or by dragging on empty space, then "
+    "align them from the inspector or the Edit menu.",
+    "Type exact X / Y values in the inspector on the right; with several panels "
+    "selected they move as a group.",
+    "Right-click a game slot to copy what is in it now into the library.",
+    "Bind a character (Layout → Character…) and the entry also stores the skills "
+    "in its quick and cooldown slots.",
+    "Q1–Q20 are quick slots numbered as in game, C0–C19 are cooldown slots.",
+    "Cooldown captions are drawn under the icon: leave a gap between rows of "
+    "cooldown slots or the text overlaps.",
+    "The game does not store character names on disk — give them once with "
+    "“Name…” in the character picker.",
+    "Turn on the grid in the toolbar to snap panels to a fixed step; the magnet "
+    "toggles snapping to other panels.",
+    "Ctrl+D duplicates the library entry — handy for trying a variant without "
+    "losing the original.",
+    "F1 lists all keyboard and mouse shortcuts.",
+)
+TIP_INTERVAL = 15000        # ms between tips
+
+
+class TipStrip(QLabel):
+    """One-line rotating hint in the status bar; a click shows the next one."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.index = int(time.time()) % len(TIPS)
+        self.setTextFormat(Qt.RichText)
+        self.setCursor(Qt.PointingHandCursor)
+        # Let the status bar shrink the strip instead of widening the window.
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.setMinimumWidth(40)
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.next_tip)
+        self.timer.start(TIP_INTERVAL)
+        self.show_tip()
+
+    def show_tip(self):
+        self.setText(f'<span style="color:{theme.ACCENT}; font-weight:bold">TIP</span>'
+                     f'&nbsp;&nbsp;<span style="color:{theme.MUTED}">'
+                     f'{TIPS[self.index]}</span>')
+        # The strip is clipped in a narrow window; the tooltip has the full text.
+        self.setToolTip(f"{TIPS[self.index]}\n\nClick for the next tip")
+
+    def next_tip(self):
+        self.index = (self.index + 1) % len(TIPS)
+        self.show_tip()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.next_tip()
+            self.timer.start(TIP_INTERVAL)      # restart the countdown
+        else:
+            super().mousePressEvent(event)
+
+
 class Pill(QWidget):
     """A rounded status label, optionally with a coloured dot."""
 
@@ -1018,6 +1088,9 @@ class Main(QMainWindow):
         self.act_bg = mk("Show background", self.toggle_background, (),
                          "Show a game screenshot under the layout",
                          "image", checkable=True)
+        self.act_tips = mk("Tips", self.toggle_tips, (),
+                           "Show a line of hints at the bottom of the window",
+                           checkable=True, checked=True)
         self.act_keys = mk("Keyboard and mouse", self.show_shortcuts, "F1", icon="keyboard")
 
     def build_menus(self):
@@ -1059,6 +1132,8 @@ class Main(QMainWindow):
         m.addActions([self.act_hidden, self.act_icons])
         m.addSeparator()
         m.addActions([self.act_bg_pick, self.act_bg])
+        m.addSeparator()
+        m.addAction(self.act_tips)
 
         m = bar.addMenu("&Help")
         m.addAction(self.act_keys)
@@ -1345,6 +1420,10 @@ class Main(QMainWindow):
         bar = self.statusBar()
         bar.setSizeGripEnabled(False)
         bar.setContentsMargins(6, 2, 8, 3)
+        # Temporary status messages cover the strip and it comes back after them.
+        self.tips = TipStrip()
+        bar.addWidget(self.tips, 1)
+        self.tips.setVisible(self.act_tips.isChecked())
         self.cursor_label = QLabel()
         self.cursor_label.setMinimumWidth(110)
         bar.addPermanentWidget(self.cursor_label)
@@ -1365,6 +1444,8 @@ class Main(QMainWindow):
             self.act_hidden.setChecked(bool(state.get("hidden", True)))
             self.act_icons.setChecked(bool(state.get("icons", True)))
             self.grid_box.setValue(int(state.get("grid", 0)))
+            self.act_tips.setChecked(bool(state.get("tips", True)))
+            self.tips.setVisible(self.act_tips.isChecked())
         except (AttributeError, TypeError, ValueError):
             pass                      # a damaged config only loses the window layout
 
@@ -1374,7 +1455,8 @@ class Main(QMainWindow):
                 "geometry": bytes(self.saveGeometry().toBase64()).decode("ascii"),
                 "splitter": self.splitter.sizes(),
                 "snap": self.act_snap.isChecked(), "hidden": self.act_hidden.isChecked(),
-                "icons": self.act_icons.isChecked(), "grid": self.grid})
+                "icons": self.act_icons.isChecked(), "grid": self.grid,
+                "tips": self.act_tips.isChecked()})
         except OSError:
             pass
 
@@ -2269,6 +2351,9 @@ class Main(QMainWindow):
         self.bg_item.setZValue(-5)
         self.bg_item.setVisible(self.act_bg.isChecked())
         self.scene.addItem(self.bg_item)
+
+    def toggle_tips(self, on):
+        self.tips.setVisible(on)
 
     def show_shortcuts(self):
         ShortcutsDialog(self).exec()
