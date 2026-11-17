@@ -85,6 +85,14 @@ def load_config():
         return {}
 
 
+def save_config(**values):
+    """Update some keys of the config file, keeping the rest."""
+    config = load_config()
+    config.update(values)
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_PATH.write_text(json.dumps(config, indent=1), encoding="utf-8")
+
+
 def docs_valid(path=None):
     """True if the folder looks like the game's 'Black Desert' documents folder."""
     return (Path(path) if path else BDO_DIR).joinpath("UserCache").is_dir()
@@ -106,10 +114,7 @@ def set_docs(path):
     if not docs:
         raise BdoUiError(f"{path} is not the game's 'Black Desert' documents "
                          "folder (it must contain UserCache)")
-    config = load_config()
-    config["docs"] = str(docs)
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(config, indent=1), encoding="utf-8")
+    save_config(docs=str(docs))
     BDO_DIR = docs
     return docs
 
@@ -483,6 +488,18 @@ def lib_load(name):
         lines = lines[1:]
     els = [el for _, el in parse_elements(lines)]
     return Preset(els, meta.get("screen"), name, meta)
+
+
+def lib_meta(name):
+    """Header of a library entry (screen size, save time) without parsing the layout."""
+    try:
+        with open(lib_path(name), encoding="latin1") as f:
+            line = f.readline().rstrip("\n")
+        if line.startswith("<!-- bdo-ui "):
+            return json.loads(line[len("<!-- bdo-ui "):-len(" -->")])
+    except (BdoUiError, OSError, ValueError):
+        pass
+    return {}
 
 
 def profile_path(name):
