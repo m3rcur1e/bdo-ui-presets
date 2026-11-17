@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 import panels
+from i18n import tr
 
 WINDOWS = sys.platform == "win32"
 GAME_EXE = "blackdesert64.exe"
@@ -112,8 +113,7 @@ def set_docs(path):
     global BDO_DIR
     docs = normalize_docs(path)
     if not docs:
-        raise BdoUiError(f"{path} is not the game's 'Black Desert' documents "
-                         "folder (it must contain UserCache)")
+        raise BdoUiError(tr("err.not_docs", path=path))
     save_config(docs=str(docs))
     BDO_DIR = docs
     return docs
@@ -194,11 +194,8 @@ class El:
     def label(self):
         idx = self.index
         if idx is None:
-            return "(slot marker)"
-        name = panels.NAMES.get(idx, f"Panel {idx}")
-        if idx == 32:
-            name = f"Chat {int(self.get('WindowIndex', '0')) + 1}"
-        return name
+            return tr("panel.marker")
+        return panels.name(idx, int(self.get("WindowIndex", "0")))
 
     def short_label(self):
         return panels.SHORT.get(self.index) or self.label()
@@ -225,7 +222,7 @@ def parse_elements(lines):
             continue
         m = _OPEN_RE.match(line)
         if not m:
-            raise BdoUiError(f"unexpected line in preset block: {line[:80]!r}")
+            raise BdoUiError(tr("err.bad_line", line=line[:80]))
         tag, attr_text, closed = m.groups()
         attrs = [[k, v] for k, v in _ATTR_RE.findall(attr_text)]
         children = None
@@ -236,7 +233,7 @@ def parse_elements(lines):
                 children.append(lines[i])
                 i += 1
             if i >= len(lines):
-                raise BdoUiError(f"unterminated <{tag}> entry")
+                raise BdoUiError(tr("err.unterminated", tag=tag))
             i += 1
         out.append((tag, El(attrs, children)))
     return out
@@ -307,8 +304,7 @@ def families():
     found = []
     cache = BDO_DIR / "UserCache"
     if not cache.is_dir():
-        raise BdoUiError(f"game settings not found at {BDO_DIR}; point the tool at "
-                         "the 'Black Desert' documents folder with: bdo-ui docs <path>")
+        raise BdoUiError(tr("err.no_settings", path=BDO_DIR))
     for d in cache.iterdir():
         f = d / "gamevariable.xml"
         if d.is_dir() and d.name.isdigit() and len(d.name) > 3 and f.is_file():
@@ -325,7 +321,7 @@ def _read_block(family):
     data = path.read_bytes()
     m = _BLOCK_RE.search(data)
     if not m:
-        raise BdoUiError(f"no UISettingPreset block in {path}")
+        raise BdoUiError(tr("err.no_block", path=path))
     body = m.group(2) or b""
     lines = body.decode("latin1").replace("\r\n", "\n").split("\n")
     return data, m, parse_elements(lines)
@@ -353,8 +349,7 @@ def _replace(tmp, path):
             tmp.unlink()
         except OSError:
             pass
-        raise BdoUiError(f"{path.name} is locked by another program "
-                         "(most likely the game). Close it and try again.")
+        raise BdoUiError(tr("err.locked", name=path.name))
 
 
 def game_running():
@@ -395,8 +390,7 @@ def backup(family):
 def write_slot(family, slot, els, force=False):
     """Replace game slot `slot` (0..2) with `els`. Game must be closed."""
     if game_running() and not force:
-        raise BdoUiError("Black Desert is running: it would overwrite the "
-                         "file on exit. Close the game first.")
+        raise BdoUiError(tr("err.running"))
     target = SLOT_TAGS[slot]
     data, m, entries = _read_block(family)
     backup_path = backup(family)
@@ -447,7 +441,7 @@ class Preset:
 
 def check_name(name):
     if not _NAME_RE.match(name or ""):
-        raise BdoUiError("bad preset name (letters, digits, space, . _ - only)")
+        raise BdoUiError(tr("err.bad_name"))
     return name
 
 
@@ -480,7 +474,7 @@ def lib_save(preset, name):
 def lib_load(name):
     path = lib_path(name)
     if not path.is_file():
-        raise BdoUiError(f"no preset named {name!r} in {LIB_DIR}")
+        raise BdoUiError(tr("err.no_preset", name=name, path=LIB_DIR))
     lines = path.read_text(encoding="latin1").split("\n")
     meta = {}
     if lines and lines[0].startswith("<!-- bdo-ui "):
@@ -516,7 +510,7 @@ def lib_delete(name):
 def lib_rename(old, new):
     dst = lib_path(new)
     if dst.exists():
-        raise BdoUiError(f"preset {new!r} already exists")
+        raise BdoUiError(tr("err.exists", name=new))
     lib_path(old).rename(dst)
     if profile_path(old).is_file():
         profile_path(old).rename(profile_path(new))
@@ -525,7 +519,7 @@ def lib_rename(old, new):
 def preset_from_slot(family, tag):
     els = read_slots(family).get(tag, [])
     if slot_is_empty(els):
-        raise BdoUiError(f"game slot {tag} is empty for family {family}")
+        raise BdoUiError(tr("err.slot_empty", tag=tag, family=family))
     return Preset([e.copy() for e in els], meta={"family": family, "from": tag})
 
 
@@ -602,13 +596,13 @@ def char_file(family, char_id):
     for p in d.iterdir() if d.is_dir() else []:
         if p.name.lower() == "gamevariable.xml":
             return p
-    raise BdoUiError(f"no settings file for character {char_id} in family {family}")
+    raise BdoUiError(tr("err.no_char_file", char=char_id, family=family))
 
 
 def skills_profile(name):
     path = profile_path(name)
     if not path.is_file():
-        raise BdoUiError(f"no skill profile {name!r} in {SKILLS_DIR}")
+        raise BdoUiError(tr("err.no_profile", name=name, path=SKILLS_DIR))
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -655,7 +649,7 @@ def capture_profile(family, char_id, keep=None):
 def _section(text, tag):
     m = re.search(r'<%s Version="\d+">\r\n(.*?)</%s>' % (tag, tag), text, re.S)
     if not m:
-        raise BdoUiError(f"character file has no filled <{tag}> section")
+        raise BdoUiError(tr("err.no_section", tag=tag))
     return m
 
 
@@ -669,13 +663,13 @@ def _apply_memos(text, wanted, changes, names):
     """Set cooldown-slot captions. The game keys them by the skill's rank I id."""
     m = _MEMO_BLOCK_RE.search(text)
     if not m:
-        raise BdoUiError("character file has no <SkillCoolTimeMemo> section")
+        raise BdoUiError(tr("err.no_memo_section"))
     memos = {int(k): v for k, v in _MEMO_LINE_RE.findall(m.group(2) or "")}
     for skill, memo in wanted.items():
         if re.search(r'["<>&\r\n]', memo):
-            raise BdoUiError(f"memo {memo!r} has characters the game file cannot hold")
+            raise BdoUiError(tr("err.bad_memo", memo=memo))
         if memos.get(int(skill)) != memo:
-            changes.append(f"memo {names.get(str(skill), skill)}: {memo}")
+            changes.append(tr("change.memo", skill=names.get(str(skill), skill), memo=memo))
             memos[int(skill)] = memo
     lines = [f'\t<SkillCoolTimeMemo SkillNo="{k}" Memo="{v}"/>' for k, v in sorted(memos.items())]
     block = (f'<SkillCoolTimeMemo Version="{m.group(1)}">\r\n'
@@ -692,14 +686,15 @@ def plan_skills(profile, only=None):
     sections = tuple(only) if only else SKILL_SECTIONS
     for name in sections:
         if name not in SKILL_SECTIONS:
-            raise BdoUiError(f"unknown section {name!r}; choose from {', '.join(SKILL_SECTIONS)}")
+            raise BdoUiError(tr("err.bad_section", name=name,
+                                choices=", ".join(SKILL_SECTIONS)))
     path = char_file(profile["family"], profile["char"])
     old = path.read_bytes().decode("latin1")
     names = dict(skill_names())
     names.update(profile.get("names", {}))
     changes = []
 
-    def rewrite(tag, line_re, wanted, make):
+    def rewrite(tag, line_re, wanted, make, change_key):
         nonlocal text
         m = _section(text, tag)
         lines = m.group(1).split("\r\n")
@@ -711,11 +706,11 @@ def plan_skills(profile, only=None):
                 new_line = make(lm.group(1), skill, line)
                 if new_line != line:
                     shown = int(lm.group(1)) + (1 if tag == "QuickSlotData" else 0)
-                    changes.append(f"{tag} {shown}: "
-                                   f"{names.get(str(skill), skill) if skill else 'empty'}")
+                    changes.append(tr(change_key, slot=shown, skill=names.get(
+                        str(skill), skill) if skill else tr("change.empty")))
                     lines[i] = new_line
         if left:
-            raise BdoUiError(f"<{tag}> has no entries for: {', '.join(sorted(left))}")
+            raise BdoUiError(tr("err.no_entries", tag=tag, slots=", ".join(sorted(left))))
         text = text[:m.start(1)] + "\r\n".join(lines) + text[m.end(1):]
 
     def quick(key, skill, line):
@@ -734,16 +729,18 @@ def plan_skills(profile, only=None):
         out = {}
         for slot, skill in slots.items():
             if not 1 <= int(slot) <= 20:
-                raise BdoUiError(f"quick slot {slot} is out of range 1..20")
+                raise BdoUiError(tr("err.quick_range", slot=slot))
             out[str(int(slot) - 1)] = skill
         return out
 
     text = old
     if "cooldown" in sections:
         rewrite("SkillCoolTimeSlot", _COOL_LINE_RE, profile.get("cooldown", {}),
-                lambda slot, skill, line: f'\t<SkillCoolTimeSlot SlotNo="{slot}" SkillNo="{skill}"/>')
+                lambda slot, skill, line: f'\t<SkillCoolTimeSlot SlotNo="{slot}" SkillNo="{skill}"/>',
+                "change.cooldown")
     if "quick" in sections:
-        rewrite("QuickSlotData", _QUICK_LINE_RE, quick_keys(profile.get("quick", {})), quick)
+        rewrite("QuickSlotData", _QUICK_LINE_RE, quick_keys(profile.get("quick", {})), quick,
+                "change.quick")
     if "memo" in sections and profile.get("memo"):
         text = _apply_memos(text, profile["memo"], changes, names)
     return path, old, text, changes
@@ -792,7 +789,7 @@ def fetch_icon(skill):
     ).read().decode("utf-8", "ignore")
     m = re.search(r'og:image" content="([^"]+)"', page)
     if not m:
-        raise BdoUiError(f"no icon found for skill {skill}")
+        raise BdoUiError(tr("err.no_icon", skill=skill))
     url = m.group(1)
     ext = url.rsplit(".", 1)[-1].lower() if "." in url.rsplit("/", 1)[-1] else "webp"
     data = urllib.request.urlopen(
@@ -820,7 +817,7 @@ def skill_names():
 def skill_name(skill, profile=None):
     name = ((profile or {}).get("names", {}).get(str(skill))
             or skill_names().get(str(skill)) or skill_db().get(str(skill), [None])[0])
-    return name or f"skill {skill}"
+    return name or tr("skill.unknown", id=skill)
 
 
 # ---------------------------------------------------------------- characters
@@ -853,7 +850,7 @@ def fetch_skill_db():
     rows = json.loads(raw.decode("utf-8-sig"))["aaData"]
     db = {str(r[0]): [html.unescape(re.sub(r"<[^>]+>", "", r[2])).strip(), r[4]] for r in rows}
     if len({v[1] for v in db.values()}) < 5:
-        raise BdoUiError("skill list from bdocodex does not cover all classes")
+        raise BdoUiError(tr("err.skill_db"))
     ICON_DIR.mkdir(parents=True, exist_ok=True)
     SKILL_DB.write_text(json.dumps(db, ensure_ascii=False), encoding="utf-8")
     _skill_db = db
@@ -943,7 +940,7 @@ def char_title(family, char_id):
     except (BdoUiError, OSError):
         cls = None
     parts = [p for p in (name, cls) if p]
-    return " · ".join(parts) if parts else f"char …{char_id[-8:]}"
+    return " · ".join(parts) if parts else tr("char.anon", id=char_id[-8:])
 
 
 def fetch_profile_icons(profile, progress=None):
@@ -968,8 +965,7 @@ def fetch_profile_icons(profile, progress=None):
 def apply_skills(profile, force=False, only=None):
     """Write cooldown-slot skills, quick-slot skills and memos into a character file."""
     if game_running() and not force:
-        raise BdoUiError("Black Desert is running: it would overwrite the "
-                         "file on exit. Close the game first.")
+        raise BdoUiError(tr("err.running"))
     path, old, new, changes = plan_skills(profile, only)
     if new == old:
         return None, changes

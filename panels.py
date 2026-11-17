@@ -2,59 +2,17 @@
 
 Names come from CppEnums.PAGameUIType (decompiled client lua, 2022 dump).
 Indices added to the game later (160+) are unknown and get a generic label.
+The names themselves are in the language catalogs (lang/*.json) under the
+keys "panel.<index>"; a new known panel is one more key in lang/en.json.
 """
 
-NAMES = {
-    2: "EXP gauge",
-    3: "UI menu",
-    9: "Minimap",
-    12: "Quick slot bar",
-    13: "Main status bar",
-    15: "Party",
-    21: "Quest tracker",
-    22: "House navi",
-    32: "Chat",
-    55: "Mount window",
-    82: "New equipment",
-    83: "Guild quest",
-    84: "PvP mode",
-    85: "Adrenaline",
-    86: "Game tips",
-    87: "Time bar",
-    88: "Skill command guide",
-    89: "Class resource",
-    111: "Skill cooldown",
-    112: "Key viewer",
-    113: "Main quest",
-    114: "Left icons",
-    115: "Right icons",
-    116: "Challenge alert",
-    117: "Coupon alert",
-    118: "Premium alert",
-    119: "Buff list",
-    120: "Horse HP",
-    121: "Horse MP",
-    122: "Stamina",
-    123: "Endurance",
-    124: "Horse endurance",
-    125: "Carriage endurance",
-    126: "Ship endurance",
-    127: "Large party",
-    138: "Main status (remaster)",
-    139: "Mount icon",
-    140: "World minimap",
-    141: "Widget functions",
-    142: "Area of Hadum",
-    143: "Kill log",
-    144: "Console quick menu",
-    145: "Console chat viewer",
-    146: "Console mount icon",
-    147: "Console item counter",
-    158: "Skill log",
-    159: "Item log",
-}
+import i18n
 
-# Short labels drawn inside small slot rectangles.
+CHAT = 32
+# Panel index -> slot number as the game shows it.
+QUICK = {}
+COOLDOWN = {}
+# Short labels drawn inside small slot rectangles (the same in every language).
 SHORT = {}
 
 # Enum: NewQuickSlot_1..9 = 91..99, _0 = 100, _11..19 = 101..109, _10 = 110.
@@ -71,15 +29,28 @@ def quick_slot_index(slot):
 
 
 for _slot in range(1, 21):
-    NAMES[quick_slot_index(_slot)] = f"Quick slot {_slot}"
+    QUICK[quick_slot_index(_slot)] = _slot
     SHORT[quick_slot_index(_slot)] = f"Q{_slot}"
 
 # SkillCoolTimeQuickSlot_0..9 = 128..137, _10..19 = 148..157
 for _i in range(10):
-    NAMES[128 + _i] = f"Cooldown slot {_i}"
+    COOLDOWN[128 + _i] = _i
     SHORT[128 + _i] = f"C{_i}"
-    NAMES[148 + _i] = f"Cooldown slot {10 + _i}"
+    COOLDOWN[148 + _i] = 10 + _i
     SHORT[148 + _i] = f"C{10 + _i}"
+
+
+def name(index, window=0):
+    """Name of a panel in the interface language; `window` tells chat windows apart."""
+    if index == CHAT:
+        return i18n.tr("panel.chat", n=window + 1)
+    if index in QUICK:
+        return i18n.tr("panel.quick", n=QUICK[index])
+    if index in COOLDOWN:
+        return i18n.tr("panel.cooldown", n=COOLDOWN[index])
+    key = f"panel.{index}"
+    return i18n.tr(key) if i18n.has(key) else i18n.tr("panel.unknown", n=index)
+
 
 # Sizes (UI units) that were identical in every preset inspected. Used only to
 # estimate the screen size a preset was saved at; real sizes are then derived
@@ -103,6 +74,6 @@ def group(index):
         return "quick"
     if 128 <= index <= 137 or 148 <= index <= 157:
         return "cooldown"
-    if index == 32:
+    if index == CHAT:
         return "chat"
     return "other"
