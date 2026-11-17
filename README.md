@@ -38,28 +38,11 @@ Run the editor:
 - Linux: `python3 main.py`
 - Windows: `bdo-ui.bat`
 
-The Windows package is built with `python3 tools/build_windows.py` on any
-system.
-
-## Source layout
-
-```
-main.py            starts the program from its folder
-bdo_ui/cli.py      command line
-bdo_ui/core/       game files, library, skill profiles (no Qt)
-bdo_ui/gui/        the editor (PySide6)
-bdo_ui/lang/       interface languages
-tools/             build of the Windows package
-```
-
-`pip install .` works too and adds a `bdo-ui` command; such a copy is updated
-with pip, not by the editor.
-
 The game's `Black Desert` documents folder is found automatically. If it is
 not, the editor asks for it on start; in a terminal use `bdo-ui docs <path>`.
 
-`CLAUDE-SETUP.md` is a detailed setup guide (in Russian) written for an AI
-assistant that is asked to install the tool.
+[docs/guide.md](docs/guide.md) has the details: the editor window, library
+entries and characters, skill profiles, troubleshooting.
 
 ## Use
 
@@ -109,7 +92,8 @@ in the Help menu.
 
 One JSON file per language in `bdo_ui/lang/`; `en.json` is the source. To add
 a language, copy it, translate the values and run `python3 -m bdo_ui.i18n` to
-check the result.
+check the result. [CONTRIBUTING.md](CONTRIBUTING.md) has
+the steps, the source layout and how to send a change.
 
 ## License
 

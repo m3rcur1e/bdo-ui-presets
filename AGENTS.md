@@ -7,6 +7,10 @@ here works through the command line; nothing needs the GUI.
 in the program folder. `bdo-ui --help` lists the commands and
 `bdo-ui <command> --help` describes the options of one.
 
+Setting the tool up for someone, the editor and troubleshooting are in
+[docs/guide.md](docs/guide.md); the source layout is in
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## What the pieces are
 
 - **Game slot** — one of the three UI presets (Edit UI) the game keeps per
