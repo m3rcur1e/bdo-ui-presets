@@ -428,6 +428,13 @@ def _keyboard(p):
     _line(p, 6.5, 12, 13.5, 12)
 
 
+def _globe(p):
+    _hollow(p)
+    p.drawEllipse(QPointF(10, 10), 6.8, 6.8)
+    p.drawEllipse(QPointF(10, 10), 2.9, 6.8)
+    _line(p, 3.2, 10, 16.8, 10)
+
+
 _ICONS = {
     "save": _save, "undo": _undo, "redo": _redo, "align_left": _align_left,
     "align_right": _align_right, "align_top": _align_top, "align_bottom": _align_bottom,
@@ -436,7 +443,7 @@ _ICONS = {
     "search": _lens, "zoom_in": _zoom_in, "zoom_out": _zoom_out, "fit": _fit,
     "trash": _trash, "pencil": _pencil, "copy": _copy, "user": _user,
     "monitor": _monitor, "folder": _folder, "download": _download, "write": _write,
-    "lock": _lock, "revert": _revert, "keyboard": _keyboard,
+    "lock": _lock, "revert": _revert, "keyboard": _keyboard, "globe": _globe,
 }
 _cache = {}
 
